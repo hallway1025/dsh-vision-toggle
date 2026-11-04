@@ -12,16 +12,25 @@ DSH 视觉插件（`dsh-see-now` 0.0.7 的 fork，Apache-2.0，LICENSE/NOTICE �
 | low | 常驻采集，大动作预筛（过线门槛 20），不唤醒 | 拉取缓冲 |
 | high | 常驻采集（门槛 12），零投递 | 拉取缓冲 |
 | max | 最灵敏（门槛 7），零打扰 | 拉取缓冲 |
-| ultra | 满幅单帧即时投递（每次开启需确认，约 872 token/帧；弹窗按切换频率给每分钟 token 预估） | 推送 |
+| ultra | 满幅 1600×900 采集 + 最高灵敏度（开启需确认，弹窗给 peek 单帧/每分钟 token 预估），零投递 | 拉取缓冲 |
 | 自定义 | 清晰度（4 档）× 节奏（省静/日常/灵敏）自由组合的拉取档 | 拉取缓冲 |
 
-通信面：`GET/POST /api/vision-toggle/{status,mode,snapshot,dialog}` + SSE `/events`（换档广播）。
+通信面：`GET/POST /api/vision-toggle/{status,mode,snapshot,dialog,screenshot,diag}` + SSE `/events`（换档广播）。
+
+## 截图键
+
+微信式截图：点胶囊旁的截图键 → 服务端隐藏 DSH 窗口 → ffmpeg gdigrab 抓全屏**原生分辨率** → 恢复窗口 → 页面内编辑层弹出 → 标注后 ✓ 直接进聊天框（作为输入框图片附件），✗ 重截，Esc 取消。
+
+- 标注工具：矩形框选 / 箭头 / 文字 / 马赛克（永远从原图取样，越涂不越乱）/ 三色 / 撤销重做（Ctrl+Z / Ctrl+Y）。
+- **投递是页面内合成的 paste 事件**：client 与聊天输入框同进程（与微信「截图组件与聊天框同进程直插」同构），不经剪贴板、不模拟按键、不依赖窗口焦点。
+- 服务端只负责抓屏：POST `/screenshot` 返回 base64 PNG；抓屏失败 504。
+- 抓屏前可自动最小化 DSH 窗口（截图里没有本插件界面），完成后自动恢复。
 错误码表见 [ERRORS.md](ERRORS.md)。
 
 ## 隐私（务必读）
 
 - **画面只进本机会话上下文**：帧经 ffmpeg → 内存 → 拼图 → 模型，全程不出本机（识图模型跟随当前聊天模型，见规格 §九）。
-- **帧默认不落盘**：拉取缓冲是纯内存（上限 48MB，进程退出即消失）；截图键走 blob URL 预览，不写文件。
+- **帧默认不落盘**：拉取缓冲是纯内存（上限 48MB，进程退出即消失）；截图键只在页面内传 base64（编辑层/输入框附件），不写临时文件。
 - **黑名单**（v1 接缝，`src/privacy.js`）：本地窗口标题匹配、中英双语初始词表、支持 `regex:` 前缀；**零留痕**（不写匹配记录）。v1 没有窗口标题数据源，接缝保留；**不做内容级 OCR 过滤**——黑名单管「开哪个源」，不管「画面里有什么」。
 - 截屏会进模型上下文：看敏感页面（密码、私照）时切「关」档。
 
@@ -46,6 +55,6 @@ node scripts/build.mjs          # esbuild 双入口 → dist/{server,client}.js
 node scripts/sim.mjs <video>    # 回放等价性（ kept 帧序列对比）
 ```
 
-模块地图：`index.js`（组装+通信面）→ `runner.js`（采集生命周期+六档 MODES）→ `loop.js`（监护循环：只攒帧+心跳，**零投递**）→ `pipeline.js`（打分/拼图/编码）→ `buffer.js`（48MB 拉取缓冲）→ `capture.js`（ffmpeg 参数）→ `sentinel.js`（**v2 预留接口，当前未接线**：每 6 帧评 1 次的预筛接缝）→ `dialog.js`（成本确认弹窗文案）→ `client.js`（对话页胶囊）。
+模块地图：`index.js`（组装+通信面）→ `runner.js`（采集生命周期+六档 MODES）→ `loop.js`（监护循环：只攒帧+心跳，**零投递**）→ `pipeline.js`（打分/拼图/编码）→ `buffer.js`（48MB 拉取缓冲）→ `capture.js`（ffmpeg 参数）→ `sentinel.js`（**v2 预留接口，当前未接线**：每 6 帧评 1 次的预筛接缝）→ `dialog.js`（成本确认弹窗文案）→ `screenshot.js`（截图键抓屏：gdigrab + 隐藏/恢复宿主窗，投递不在这里）→ `client.js`（对话页胶囊 + 截图编辑层 + 页面内合成 paste 投递）。
 
 数据目录：`~/.dsh/vision-toggle/config.json`（原子写 + .bak；只存 mode/pace/quality/updatedAt）。

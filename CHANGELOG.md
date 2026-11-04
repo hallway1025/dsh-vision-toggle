@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 — 2026-11-04（微信式截图直插）
+
+- 截图键全链路重构：服务端只管抓屏（gdigrab 原生分辨率 + 隐藏-恢复宿主窗），base64 PNG 回传 client；
+- **投递在页面内完成**：client 构造 File 派发 paste 事件直接喂 Lexical 编辑器（宿主粘贴链原生接住 → 附件入库），与微信「截图组件与聊天框同进程直插」同构——不经剪贴板、不模拟按键、不依赖窗口焦点；
+- 标注编辑器移到页面内：全屏 canvas 覆盖层（矩形框选 / 箭头 / 文字 / 马赛克（永远从原图取样）/ 三色 / 撤销重做 Ctrl+Z/Ctrl+Y / ✓ 确认贴图 / ✗ 重截 / Esc 取消）；
+- 删 `src/editor.js`（BrowserWindow 版）：插件 server 是宿主 fork 的独立 Node 子进程，`import('electron')` 返回空对象（`/diag` 实锤），BrowserWindow 前提架构性不成立；
+- 删服务端全部投递路径：A 路 Electron paste / D 路 PowerShell 剪贴板+SendKeys（实测：STA SetImage 后进程退出剪贴板变空、SendKeys 焦点不可控，两坑均复现）；
+- `POST /screenshot` 响应统一 `{ok, delivered:'client-paste', png, hidden}`；504=抓屏失败；编辑层取消不再产生 cancelled 响应；
+- 新增 `GET /diag` 诊断端点（pid/ppid/ptype/node/electron 探针）。
+
+## 0.5.0 — 2026-11-04（截图基座）
+
+- gdigrab 全屏原生分辨率抓屏；抓屏前 ShowWindow 最小化 DSH 窗口、完成后恢复（450ms 等合成器）；
+- `POST /screenshot` 端点；client 截图键改调新端点。
+
 ## 0.4.0 — 六档全拉取（ultra 拉取化）
 
 主人 m09062 定 ultra 定位为「参数拉满、不差钱用户的持续高精度观看」。推送形态与该定位矛盾
