@@ -1,5 +1,5 @@
 /**
- * tool-spec.js — `see_now` 的契约。
+ * tool-spec.js — `vision` 的契约（R19 更名：see_now → vision，防与原 see-now 插件撞名）。
  *
  * **注意 `parameters` 的形状**：它是「属性名 → 值 schema」的映射，不是完整的 JSON Schema。
  * 写成 `{ type:'object', properties:{...} }` 会被宿主拒绝：
@@ -25,39 +25,31 @@ export const TOOL_TIMEOUT_MS = 900_000;
 /** `seconds` 的默认值：只是**上限**，攒够一张就提前返回。 */
 export const DEFAULT_BLOCK_SEC = 300;
 
-export function seeNowToolSpec() {
+export function visionToolSpec() {
   return {
-    name: 'see_now',
+    name: 'vision',
     description:
-      'Watch what is on the user\'s screen **live** and get back one image made of several frames. '
-      + 'Frames are picked by how much the picture changes, so a static screen costs almost nothing '
-      + 'while a busy one gives you more frames.\n\n'
+      'Look at what is on the user\'s screen and get back one image made of several frames. '
+      + 'Pull-mode: the capture runs in the background at the quality the user picked on the '
+      + 'composer capsule (关/静默/动态/原画/自动); you only pull an image when you need one.\n\n'
       + 'How to use it:\n'
-      + '- `see_now({action:"watch"})` — **blocking call; this is the normal way to watch.** The first '
-      + 'call returns the current screen in about a second; after that it blocks until a sheet is ready '
-      + '(15–40s when the screen is changing, longer when it is static) or the user types in the floating '
-      + 'window, then returns that sheet. **Call it again right after you reply** — the blocking call IS '
-      + 'the pause; the conversation never ends between sheets. Do not end your turn while the user is '
-      + 'still watching.\n'
-      + '- `see_now({action:"peek"})` — grab the sheet that already piled up, without waiting. Use this '
-      + 'when the plugin wakes you ("有新画面了"), because then you are not inside a `watch` any more.\n'
-      + '- `see_now({action:"status"})` — is it still watching, is the loop alive, which mode is active.\n'
-      + '- `see_now({action:"stop"})`.\n\n'
-      + 'Safety net: if you ever stop calling `watch`, the plugin still keeps capturing and will wake '
-      + 'you with a short note when a new sheet fills up (then `peek`). It also stops everything the '
-      + 'moment the user closes the floating window, and tells you so — when that note appears, do NOT '
-      + 'call `see_now` again until the user asks.\n\n'
-      + '**The user reads your normal replies in the conversation page** — there is no separate '
-      + 'speech channel in this build. When something is worth saying, just reply normally.\n\n'
-      + '**They are looking at the same screen as you, over and over.** So: do not narrate everything, '
-      + 'do not repeat the sentence you already said (the tool result reminds you of it), and silence is '
-      + 'a perfectly good answer — there is no quota. Say something when it actually changed or when it '
-      + 'is worth pointing at.\n\n'
+      + '- `vision({action:"peek"})` — take the sheet that already piled up, without waiting. '
+      + 'This is the normal way: capture is usually already running, so peek returns immediately '
+      + 'with recent frames. If it says nothing is ready yet, wait a moment and peek again.\n'
+      + '- `vision({action:"watch"})` — blocking call: waits until a fresh sheet is ready '
+      + '(15–40s when the screen is changing, longer when static) or the timeout hits. Use it for '
+      + 'the FIRST look of a conversation, or when the user just asked "看看我屏幕".\n'
+      + '- `vision({action:"status"})` — is capture running, which mode is active, queue depth.\n'
+      + '- `vision({action:"stop"})`.\n\n'
+      + '**Mode belongs to the user.** The five-mode capsule sits at the composer (关/静默/动态/原画/自动); '
+      + 'do not switch modes unless the user explicitly asks ("慢一点"→tell them to pick 静默 or use pace '
+      + 'below; "截一张"→use snapshot from the capsule). You may still tune pace/quality per call.\n\n'
+      + 'When you cannot read something (small text, filenames, a menu), do NOT guess: call again with '
+      + '`quality:"high"` (or `"ultra"` for near-full-resolution) — changing quality returns ONE sharp '
+      + 'frame of the current screen in about half a second.\n\n'
       + 'The image is returned as a tool result (not pushed into the chat), so just read it. '
       + 'Frames are numbered 1..n in time order; the text lists each frame\'s timestamp and pixel size. '
-      + 'Do NOT poll faster than every ~10 seconds — nothing new arrives that fast, and each image costs tokens.\n\n'
-      + 'If you cannot read something (small text, filenames, a menu), do NOT guess: call again with '
-      + '`quality:"high"` and you get one sharp frame of the current screen in about half a second.',
+      + 'Do NOT poll faster than every ~10 seconds — nothing new arrives that fast, and each image costs tokens.',
     parameters: {
       action: {
         type: 'string',

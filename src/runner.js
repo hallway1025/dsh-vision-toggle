@@ -15,13 +15,18 @@
  *
  * ③ **取图永远走队列，不新建**。两张图同时在飞的时候，`take()` 给的是最早那张
  *    （时间顺序不能乱），新图挤掉旧图由 pipeline 的 queueDepth 负责。
+ *
+ * ## B3 拉取模式（R20 接线）
+ *
+ * 档位表 MODES 里 silent/dynamic/auto 带 `pullMode:true`：采集回调只打分+帧进环形
+ * 缓冲（buffer.js，48MB 上限），**组图延迟到 peek/watch 按需做**（pipeline.peekSheet）。
+ * 悬浮窗/插话/语音机制已随 B3 丢弃清单移除 —— 视觉的交互面只有对话页胶囊。
+ * ultra 档保留推送形态（scene 满幅单帧天然是 maxFrames:1 推送）。
  */
 
 import { spawnFrames, pickScreenEngine, screenEngineWarning } from './capture.js';
 import { createPipeline } from './pipeline.js';
-import { chatWatcherShared, enterChatWait } from './chat.js';
-import { noteInterjected } from './interject.js';
-import { openWindow, windowAlive } from './window.js';
+import { createBuffer } from './buffer.js';
 
 /** 三档清晰度。数字是画布像素，token 约等于 像素÷1650（见调参报告）。 */
 export const SIZES = Object.freeze({
@@ -68,10 +73,10 @@ export const PACES = Object.freeze({
 export const DEFAULT_PACE = 'normal';
 
 /**
- * 五档模式表（S2 · 规格 §四 C2）。**只落数据结构，不改任何行为**（R6：
- * 行为变化全部推迟 S4，防 S3 拉取模式推翻参数语义）。
+ * 五档模式表（S2 · 规格 §四 C2；S4 起行为接线）。
  *
- * 每档是一组参数组合；createRunner 尚未消费本表，现阶段仅供查询与 S4 接管用。
+ * 每档是一组参数组合；createRunner 消费本表：`pullMode:true` 的档位（silent/dynamic/auto）
+ * 走 B3 拉取模式（采集→环形缓冲，出图按需组）；ultra 保留推送（scene 满幅单帧）。
  *
  * | 档 | 语义 | 成本形态 |
  * |---|---|---|
@@ -85,7 +90,7 @@ export const DEFAULT_PACE = 'normal';
  * - enabled:false 表示采集进程应停止（关档语义）。
  * - wakeGapSec:null = 跟随 PACES[pace].wakeGapSec；Infinity = 不主动唤醒。
  * - scene:true 时走 SCENE_OPTS（满幅单帧），唤醒间隔硬编码 4s（规格 §三 R1）。
- * - auto 档 v1 先映射 dynamic 参数，S4 实装自适应决策。
+ * - auto 档参数同 dynamic 起步，自适应升降由 autoMode.js 决策器驱动（S4，O9 纯代码层）。
  */
 export const MODES = Object.freeze({
   off: Object.freeze({
@@ -105,6 +110,7 @@ export const MODES = Object.freeze({
     minFrames: 2,
     scene: false,
     wakeGapSec: Infinity,
+    pullMode: true,
   }),
   dynamic: Object.freeze({
     label: '动态',
@@ -114,6 +120,7 @@ export const MODES = Object.freeze({
     minFrames: 1,
     scene: false,
     wakeGapSec: null,
+    pullMode: true,
   }),
   ultra: Object.freeze({
     label: '原画',
@@ -132,9 +139,11 @@ export const MODES = Object.freeze({
     minFrames: 1,
     scene: false,
     wakeGapSec: null,
+    pullMode: true,
   }),
 });
-export const DEFAULT_MODE = 'dynamic';
+/** 默认关档（规格 §四：进程重启一律回关档）。上次选择记 config.js，仅供对照。 */
+export const DEFAULT_MODE = 'off';
 
 /** 参数签名：key 排序后拼串，`{a:1,b:2}` 与 `{b:2,a:1}` 视为同一个。 */
 function optsSig(o) {
@@ -168,6 +177,10 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
   let graceTimer = null;
   let busy = false;
   let quality = DEFAULT_QUALITY;
+  /** B3 拉取模式：非 null 时采集回调只进缓冲，出图走 peekSheet（R20） */
+  let buffer = null;
+  /** 已 peek 过的帧最大 t —— loop 用它判断「有没有新帧」防重复唤醒 */
+  let lastPeekedT = 0;
   /**
    * 建当前管线时用的**调用方参数**（不含 oneShot）。
    *
@@ -177,21 +190,6 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
    * 是两套完全不同的出图口径，不能在同一根管线上混着跑。
    */
   let runOpts = {};
-  // 共享一个 watcher：每做一个新的会重新 prime（只记位置不读旧消息），
-  // 那模型思考期间用户说的话就永远看不见了。
-  const chatPoll = chatWatcherShared();
-  let windowState = null;
-  let windowPending = null;
-  /**
-   * 这一次会话里**窗真的开起来过**没有。
-   *
-   * 循环靠它区分两件完全不同的事：
-   *   - 窗开过、现在没了 → **用户关掉了**，该停下来（那是"我不看了"）
-   *   - 窗从来没开起来（没有带 tkinter 的 python）→ 不该当成用户关窗，继续看
-   * 没有这个标记的话，第一种情况永远检不出、第二种情况会误判成挂断。
-   */
-  let windowOpened = false;
-
   /**
    * 待领的说明（挂断那一条）。
    *
@@ -227,6 +225,7 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
     run = null;
     running = false;
     source = null;
+    buffer = null;
     stoppedAt = Date.now();
     if (why) log(`收工：${why}`);
   }
@@ -259,15 +258,13 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
     // 走到这里就是"明确要开始看"（watch 的自动重启已经在前面被硬闸挡住了）。
     hungUp = false;
     endedSource = null;
-    // **窗被用户关掉之后，这里必须复位**：`windowState` 缓存着 `{ok:true}`，
-    // `windowOpened` 也还是 true —— 不复位的话下一次 watch 会（a）不再开窗，
-    // （b）循环立刻又把"窗没了"判成用户关窗，落第二条挂断说明。
-    if (!windowAlive()) { windowState = null; windowOpened = false; }
     let engine = src.engine ?? 'auto';
     if (src.kind === 'screen' && engine === 'auto') engine = await pickScreenEngine({ ffmpegPath });
     const size = SIZES[q] ?? SIZES[DEFAULT_QUALITY];
-    // oneShot 由调用方（watch）决定：**只有换清晰度**时置 true（缓冲区刚扔，等攒满等于白等一个窗口）
-    const p = createPipeline({ ...opts, width: size[0], height: size[1] });
+    // B3 拉取模式（R20）：pullMode 档位采集回调只打分+帧进环形缓冲（48MB 上限），
+    // 组图延迟到 peek/watch 按需做 —— 静止屏零组图成本，peek 才付 PNG 编码。
+    if (opts.pullMode) buffer = createBuffer();
+    const p = createPipeline({ ...opts, width: size[0], height: size[1], buffer });
     // 记下"这次建管线用的调用方参数"（不含 oneShot）——watch 靠它发现"模式变了"。
     runOpts = { ...opts };
     delete runOpts.oneShot;
@@ -315,28 +312,6 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  /**
-   * 把悬浮窗支起来（幂等）。**只在真要阻塞的时候调** —— 没在等就没必要弹窗。
-   * 开不起来不算失败：模型照样能 watch，只是用户只能等下一轮。
-   *
-   * 注意是 await：要真跑一次 `import tkinter` 验解释器、再等 700ms 看它有没有退出，
-   * 不然会拿到一个"成功"但其实早就退了的窗（pid 指向死进程）。
-   */
-  async function ensureWindow() {
-    if (windowState?.ok) return windowState;
-    if (windowPending) return windowPending;
-    windowPending = openWindow({ log }).then((st) => {
-      windowState = st;
-      if (st.ok) {
-        windowOpened = true;
-        log(st.already ? '悬浮窗已开着' : `悬浮窗已开（${st.from}）`);
-      } else {
-        log(`悬浮窗没开起来：${st.reason}`);
-      }
-      return st;
-    }).finally(() => { windowPending = null; });
-    return windowPending;
-  }
 
   return {
     start,
@@ -354,7 +329,7 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
     /** 有没有一个"已经放完、不能自动重播"的文件源 */
     endedFile() { return endedSource ? { ...endedSource } : null; },
     /** 这一轮开过窗没有（循环判"用户关窗"用） */
-    windowWasOpen() { return windowOpened; },
+    windowWasOpen() { return false; }, // B3：悬浮窗机制已移除，恒 false（loop 兼容位）
 
     /**
      * 阻塞等一张图。
@@ -369,20 +344,11 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
      */
     async watch({
       seconds = 300, minFrames = 1, src = null, quality: q = null, opts = {},
-      // 宿主给的取消信号。**必须在这里看**：不看的话用户按了停止，这个调用还要挂到封顶
-      // （陪看那边专门写过这条：`signal` 是"这一轮被取消了"的唯一通知）。
+      // 宿主给的取消信号。**必须在这里看**：不看的话用户按了停止，这个调用还要挂到封顶。
       signal = null,
       // 冷启动时"先给此刻"的宽限：等第一帧最多这么久，等到就立刻出图。
       eagerMs = 3000,
     } = {}) {
-      /**
-       * 三个"不许自动重开"的硬闸。都来自社区实报：
-       * 「回放会解 1955 帧、攒一堆唤醒、一直弹有新画面，关窗也停不干净，得卸载才行」。
-       *
-       * 共同原因是 `watch` 在 `stopped` 时会**自动重启采集**，而重启对文件源意味着
-       * 从头再放一遍，对关过窗的用户意味着"我刚关掉它又弹出来了"。
-       * 所以：只有**显式传了来源**（用户明确说要看什么）才允许清闸重开。
-       */
       const explicitSrc = Boolean(src && src.kind);
       const blocked = guardReason({ hungUp, fileEnded: Boolean(endedSource), explicitSrc });
       if (blocked === 'hung-up') return { ok: false, reason: 'hung-up', waited: 0 };
@@ -397,16 +363,7 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
       try {
         const prevSrc = source ?? lastSource;
         const switching = Boolean(pipeline) && q && SIZES[q] && q !== quality;
-        // 管线参数变了（常规 ↔ 逐帧）：这两套口径建管线时就定死了，只能重开。
         const modeChanged = Boolean(pipeline) && optsSig(runOpts) !== optsSig(opts);
-        /**
-         * **要不要重开采集**：`pipeline` 不为空**不等于**采集还在跑。
-         *
-         * `teardown()` 故意留着 `pipeline`（好把队列里剩下的图发完），于是宽限期到点、
-         * 或者模型 `stop` 之后，`pipeline` 还在但 `running` 已经是 false ——
-         * 只看 `!pipeline` 就会"跳过启动、直接等一张永远不会来的图"，等到封顶才回一句
-         * "没看成"。用户看到的是"第一次能看，第二次就不行了"。
-         */
         const stopped = Boolean(pipeline) && !running;
         // **冷启动**（手上没有管线，或采集已经停了）才 eager。换清晰度不算 —— 那条路已经用 oneShot 了。
         const cold = !pipeline || stopped;
@@ -419,104 +376,76 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
           await start({
             src: src ?? prevSrc ?? { kind: 'screen' },
             // 只有**换清晰度**才 oneShot：那一下缓冲区刚被扔掉，等攒满一张就等于白等一整个窗口。
-            // 普通的第一次 watch 不 oneShot —— 模型要的是"这 20 秒"，不是"此刻"。
             opts: { ...opts, oneShot: switching },
             quality: q,
           });
         } else if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
 
-        // 真要阻塞了才支窗（第一次起进程 ~1.5s，之后是空操作）
-        const win = await ensureWindow();
-
-        /**
-         * 取一条用户插话（没有就 null）。
-         *
-         * 只写一份：冷启动的 eager 和正常等待**都要先看插话**，各写一套就会出现
-         * "eager 那段把话吃了但没带上"这种只在首帧复现的丢话。
-         */
-        const pollUser = () => {
-          const said = chatPoll().filter((e) => e.role === 'user');
-          if (!said.length) return null;
-          return said.map((e) => e.text).join(' / ').slice(0, 800);
-        };
-
-        /** 用这句话截断出图（插话优先于一切：不等判据、不排队） */
-        const interjectNow = async (text) => {
-          // 记一条待回执：下一轮工具结果里如果还没带 `say`，就把「你还没回她」顶出来。
-          // 模型很可能先去取图了，回来时那段话已经不在上下文最前面（陪看那边实报过）。
-          noteInterjected(text);
-          // 刚开采集时可能一帧都还没到（-probe 那几百毫秒）—— 用户问"这是什么"，
-          // 空着手回去等于没看。最多等 0.8s 让第一帧到，再截断。
-          for (let i = 0; i < 8 && pipeline && !pipeline.hasFrame; i += 1) await sleep(100);
-          const now = pipeline?.flushNow(null, 'user');
-          const waited = (Date.now() - t0) / 1000;
-          return now
-            ? { ok: true, sheet: now, waited, quality, userText: text }
-            : { ok: false, reason: 'user-no-frame', waited, userText: text };
-        };
-
         const deadline = t0 + Math.max(2, seconds) * 1000;
-        // **登记成"我在等用户说话"**：常驻循环也盯这条通道，它一旦先把话吃掉，
-        // 就会走 `followup` 投进会话 —— 而会话正卡在这个工具调用里等结果，
-        // 那条消息要等这一轮结束才处理，**接不住"从等待里出来"**。
-        // 用户看到的就是"我在窗口里说话，它一动不动"（陪看那边实报过）。
-        //
-        // 冷启动的 eager 也算"在等"：那 3 秒里用户说的话同样不能被循环吃掉。
-        const leaveChan = enterChatWait();
-        try {
-          /**
-           * **冷启动先给此刻**。
-           *
-           * 静止屏幕上第一条要等 30~60 秒（兜底帧 20 秒一个，攒 3 帧才封箱）——
-           * 用户说"看看我屏幕"，等一分钟才回话，体感就是"它没反应"。
-           * 所以冷启动时第一帧到手就发，多花一张图（216 token），换"1 秒内给反应"。
-           *
-           * 只在冷启动生效：管温着的时候再 eager，就退化成"每帧一张图"了。
-           * **插话优先**：这 3 秒里用户说话了，就按插话走（体感上他是在追问）。
-           */
+
+        // ── 拉取模式（B3/R20）：帧在环形缓冲里，等到「新帧够数」再按需组图 ──
+        if (buffer) {
+          const need = Math.max(1, minFrames);
+          while (Date.now() < deadline) {
+            if (signal?.aborted) {
+              return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };
+            }
+            if (buffer.count >= need) {
+              const sheet = pipeline.peekSheet(need, 15);
+              if (sheet) {
+                const newest = sheet.frames[sheet.frames.length - 1]?.t ?? 0;
+                if (newest > lastPeekedT) lastPeekedT = newest;
+                return { ok: true, sheet, waited: (Date.now() - t0) / 1000, quality, pull: true };
+              }
+            }
+            if (!running) break;
+            await sleep(120);
+          }
+          // 到点：手上攒的也算数（partial），一张都没有才报 no-change
+          const partial = buffer.count > 0 ? pipeline.peekSheet(1, 0) : null;
+          if (partial) {
+            const newest = partial.frames[partial.frames.length - 1]?.t ?? 0;
+            if (newest > lastPeekedT) lastPeekedT = newest;
+            return { ok: true, sheet: partial, waited: (Date.now() - t0) / 1000, partial: true, quality, pull: true };
+          }
+          return {
+            ok: false,
+            reason: signal?.aborted ? 'cancelled' : (frames ? 'no-change' : 'capture-stopped'),
+            waited: (Date.now() - t0) / 1000,
+            error: lastError,
+          };
+        }
+
+        // ── 推送模式（ultra / 显式来源）：队列语义，保留 eager 首帧 ──
+        while (Date.now() < deadline) {
+          if (signal?.aborted) {
+            return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };
+          }
+          // **冷启动先给此刻**：静止屏第一条要等 30~60s，用户刚开口就等一分钟，体感是"没反应"。
           if (cold && minFrames <= 1 && eagerMs > 0) {
             const eagerUntil = Date.now() + eagerMs;
             while (Date.now() < eagerUntil && !signal?.aborted) {
-              const said = pollUser();
-              if (said) return await interjectNow(said);
               if (pipeline?.hasFrame) {
                 const first = pipeline.flushNow(null, 'first');
                 if (first) {
                   return {
                     ok: true, sheet: first, waited: (Date.now() - t0) / 1000,
-                    quality, windowOpen: win.ok, first: true,
+                    quality, first: true,
                   };
                 }
               }
               await sleep(60);
             }
           }
-
-          while (Date.now() < deadline) {
-            // 宿主取消了这一轮（用户按停止 / 超时策略）就立刻收工，别继续挂着
-            if (signal?.aborted) {
-              return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };
+          const s = pipeline?.take();
+          if (s) {
+            if (s.frames.length >= minFrames) {
+              return { ok: true, sheet: s, waited: (Date.now() - t0) / 1000, quality };
             }
-            // **插话优先于一切**：用户说话了就立刻截断，不等判据、不排队
-            const said = pollUser();
-            if (said) return await interjectNow(said);
-            const s = pipeline?.take();
-            if (s) {
-              // **正常返回也要过 minFrames**。以前只有超时分支检查，于是
-              // `minFrames: 5` 在队列先到的路径上会被无视，照样交一张 1 帧的图
-              // （issue #1 的复现：`{ ok: true, frames: 1 }`）。
-              // 不够就丢掉这一张接着等 —— 到点还没攒够，会走下面的 no-change 提示。
-              if (s.frames.length >= minFrames) {
-                return { ok: true, sheet: s, waited: (Date.now() - t0) / 1000, quality, windowOpen: win.ok };
-              }
-            }
-            if (!running && !pipeline?.pending) break;   // 采集停了，队列也空了
-            await sleep(120);
           }
-        } finally {
-          leaveChan();
+          if (!running && !pipeline?.pending) break;
+          await sleep(120);
         }
-        // 到点了：手上攒的半张也算数（用户已经在等），但不够 minFrames 就不给
         const last = pipeline?.flushNow(null, 'timeout');
         if (last && last.frames.length >= minFrames) {
           return { ok: true, sheet: last, waited: (Date.now() - t0) / 1000, partial: true, quality };
@@ -549,10 +478,27 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
      * 不在这里开窗的话，用户永远没有可以打字的入口，也就没有"关窗 = 不看了"。
      */
     peek() {
+      // 拉取模式（B3/R20）：按需组图。peekSheet **不消费**缓冲 —— 同一批帧可重复 peek，
+      // 画面随新帧自然更新；loop 用 peekAvailable() 判「有新帧」防重复唤醒。
+      if (buffer) {
+        const sheet = running ? pipeline.peekSheet(4, 15) : null;
+        if (sheet) {
+          const newest = sheet.frames[sheet.frames.length - 1]?.t ?? 0;
+          if (newest > lastPeekedT) lastPeekedT = newest;
+        }
+        if (running) armGrace();
+        return sheet;
+      }
       const queued = pipeline?.take() ?? null;
       if (running) armGrace();
-      if (!windowState?.ok && !windowPending) void ensureWindow();
       return queued;
+    },
+
+    /** 拉取模式下「有没有没 peek 过的新帧」（loop 防重复唤醒用） */
+    peekAvailable() {
+      if (!buffer || !running) return false;
+      const newest = buffer.peek(1, 0)[0]?.t ?? 0;
+      return newest > lastPeekedT;
     },
 
     /** 常驻循环每拍续命（见 touch 的注释） */
@@ -587,13 +533,15 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
         idleSec: stoppedAt ? Math.round((Date.now() - stoppedAt) / 1000) : 0,
         stats: pipeline?.stats ?? null,
         pending: pipeline?.pending ?? 0,
+        // 拉取模式状态（B3/R20）：buffer 在跑=pull 档位；buffered 给计数与字节占用
+        pull: Boolean(buffer),
+        buffered: buffer ? { count: buffer.count, mb: +buffer.mbUsed.toFixed(1), mbMax: buffer.mbMax } : null,
         // 出图序号（单调递增）：常驻循环靠它保证"同一张图只叫醒一次"。
         // `pending` 只说明"队列里有"，不说明"是不是新的一张"—— 模型不取的话它一直是 1。
         sheets: pipeline?.stats?.sheets ?? 0,
         // 本批第一帧到现在多久：唤醒文案里要说"攒了多久"，不然模型不知道这段时间有多长
         secondsSinceWake: pipeline?.secondsSinceWake ?? null,
         // 这一轮开过窗没有（循环靠它区分"用户关了窗" 和 "窗压根没开起来"）
-        windowOpened,
         // 有没有待领的说明（挂断那条）—— status 里看得见，才不会"明明写了没人读"
         notePending: Boolean(pendingNote),
       };

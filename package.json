@@ -22,11 +22,6 @@
     "./png": "./src/png.js",
     "./pipeline": "./src/pipeline.js",
     "./capture": "./src/capture.js",
-    "./chat": "./src/chat.js",
-    "./speech": "./src/speech.js",
-    "./voice": "./src/voice.js",
-    "./interject": "./src/interject.js",
-    "./window": "./src/window.js",
     "./runner": "./src/runner.js",
     "./loop": "./src/loop.js",
     "./timer": "./src/timer.js",
@@ -34,14 +29,14 @@
     "./client": "./src/client.js",
     "./buffer": "./src/buffer.js",
     "./sentinel": "./src/sentinel.js",
-    "./auto-mode": "./src/autoMode.js"
+    "./auto-mode": "./src/autoMode.js",
+    "./config": "./src/config.js",
+    "./privacy": "./src/privacy.js",
+    "./model-info": "./src/model-info.js",
+    "./dialog": "./src/dialog.js"
   },
   "files": [
-    "bin",
     "src",
-    "examples/floating-chat/*.py",
-    "examples/floating-chat/*.png",
-    "examples/voice-say-mac.mjs",
     "scripts",
     "cordis.patch.yml",
     "dsh.plugin.json",
@@ -92,5 +87,10 @@
   },
   "bin": {
     "dsh-see-window": "bin/see-window.mjs"
+  },
+  "dsh.client": {
+    "platform": "web",
+    "immediately": true,
+    "inject": []
   }
 }

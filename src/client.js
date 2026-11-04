@@ -9,7 +9,7 @@
  * 通信面：GET /api/vision-toggle/status · POST /mode · POST /snapshot
  *         SSE /api/vision-toggle/events（档位变化广播）
  *
- * 槽位：conversation.input.right（输入框右侧、模型选择器左边，
+ * 槽位：conversation.input.model（模型选择器旁，m06074 实测定稿；right 槽已不存在，
  * 活案例 dsh-liangshen）。五档胶囊 + 截图键（规格 §四 / 决策 5）。
  */
 window.__ModuleLoader__.load({
@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
       silent: '静默：常驻采集不主动唤醒，仅模型 peek 时出图（floor 帧底价）',
       dynamic: '动态：自动升降清晰度 + 节奏适配（按屏幕活动计费）',
       ultra: '原画：满幅单帧，每张约 872 token（最贵一档，逐帧唤醒）',
-      auto: '自动：按屏幕活动度自适应选档（v1 暂映射动态）',
+      auto: '自动：拉取模式 + 静止 5 分钟自动降费、15 分钟建议关闭（决策器纯本地）',
     }
     const API = '/api/vision-toggle'
 
@@ -49,6 +49,25 @@ window.__ModuleLoader__.load({
       display: 'inline-flex', alignItems: 'center', gap: '3px',
       verticalAlign: 'middle', marginLeft: '6px',
     }
+    // R23 弹窗浮层：fixed 覆盖 + 居中小卡（不依赖宿主组件库，主题变量取色）
+    const overlayStyle = {
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: 'rgba(0,0,0,0.35)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }
+    const dialogStyle = {
+      maxWidth: '420px', width: '86%', padding: '16px',
+      borderRadius: '10px', background: 'var(--dsh-bg-color, #fff)',
+      border: '1px solid var(--dsh-border-color, rgba(127,127,127,0.35))',
+      boxShadow: '0 8px 30px rgba(0,0,0,0.18)',
+    }
+    const dialogTextStyle = { fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: '12px' }
+    const dlgBtn = (primary) => ({
+      fontSize: '12px', padding: '5px 14px', borderRadius: '6px', cursor: 'pointer',
+      border: '1px solid var(--dsh-border-color, rgba(127,127,127,0.35))',
+      background: primary ? 'var(--dsh-primary-color, #2563eb)' : 'transparent',
+      color: primary ? '#fff' : 'inherit',
+    })
     const btnStyle = (active) => ({
       fontSize: '12px', lineHeight: '1', padding: '4px 9px',
       borderRadius: '999px', cursor: 'pointer', border: '1px solid',
@@ -64,8 +83,21 @@ window.__ModuleLoader__.load({
       const [mode, setMode] = useState(undefined)
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState(null)
+      // R23 自定义弹窗：text=正文，resolve 由按钮回调完成（Promise 挂在 ref 上）
+      const [confirmText, setConfirmText] = useState(null)
+      const confirmResolve = useRef(null)
       const modeRef = useRef(mode)
       modeRef.current = mode
+
+      const askConfirm = (text) => new Promise((resolve) => {
+        confirmResolve.current = resolve
+        setConfirmText(String(text || '').replaceAll('\\n', '\n'))
+      })
+      const settleConfirm = (ok) => {
+        setConfirmText(null)
+        const r = confirmResolve.current; confirmResolve.current = null
+        try { r && r(ok) } catch {}
+      }
 
       useEffect(() => {
         let alive = true
@@ -90,8 +122,15 @@ window.__ModuleLoader__.load({
       const pick = async (id) => {
         if (busy) return
         // 原画成本警告（规格 §四：每次开启弹窗警告确认）
+        // R23：不用浏览器原生 confirm 弹窗（宿主页面禁用）——文案由 GET /dialog 下发
+        //（token 数集中在服务端 dialog.js 估算，client 永不复算）
         if (id === 'ultra' && modeRef.current !== 'ultra') {
-          if (!window.confirm('原画档：满幅单帧，每张约 872 token（最贵一档，逐字级可读）。\n确认开启？')) return
+          let ok = false
+          try {
+            const d = await api('/dialog')
+            ok = await askConfirm(d.text || '原画档成本较高，确认开启？')
+          } catch { ok = await askConfirm('原画档：满幅单帧（最贵一档）。确认开启？') }
+          if (!ok) return
         }
         const prev = modeRef.current
         setBusy(true); setErr(null); setMode(id) // 乐观更新，失败回滚
@@ -146,15 +185,24 @@ window.__ModuleLoader__.load({
           style: btnStyle(false),
         }, '📷'),
         err ? h('span', { title: err, style: { fontSize: '11px', color: '#e05252', marginLeft: '2px' } }, '⚠') : null,
+        confirmText ? h('div', { style: overlayStyle },
+          h('div', { style: dialogStyle },
+            h('div', { style: dialogTextStyle }, confirmText),
+            h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+              h('button', { style: dlgBtn(false), onClick: () => settleConfirm(false) }, '取消'),
+              h('button', { style: dlgBtn(true), onClick: () => settleConfirm(true) }, '确认开启'),
+            ),
+          ),
+        ) : null,
       )
     }
 
     function apply(ctx) {
       // 槽位缺失 / 宿主形态变化 → 优雅降级为不渲染（R-宽容策略第 3 层）
-      ctx.slots.inject('conversation.input.right', () => {
+      ctx.slots.inject('conversation.input.model', () => {
         try {
           const unregister = ctx.slots.register({
-            name: 'conversation.input.right',
+            name: 'conversation.input.model',
             id: 'vision-toggle-capsule',
             order: 15,
           }, Capsule)

@@ -8,8 +8,13 @@
 
 import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, MODES, DEFAULT_MODE } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
-import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
-import { startLoop, HANGUP_NOTE } from './loop.js';
+import { visionToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
+import { startLoop } from './loop.js';
+import { loadConfig, saveConfig } from './config.js';
+import { createAutoPilot } from './autoMode.js';
+import { createPrivacy } from './privacy.js';
+import { modelInfoOf } from './model-info.js';
+import { ultraDialogText } from './dialog.js';
 
 export const name = 'dsh-vision-toggle';
 
@@ -100,7 +105,7 @@ function sheetText(sheet, { waited = 0, partial = false, looping = false } = {})
       + '你现在只要做一件事 —— 值得说就在对话里正常回复，不值得说就别出声。'
       + '用户关掉悬浮窗我就停。'
     : '';
-  return `${head}\n${lines.join('\n')}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）`;
+  return `${head}\n${lines.join('\n')}${loopNote}\n（${whyText}；想看下一段就再调一次 \`vision({action:"peek"})\`。）`;
 }
 
 /**
@@ -117,7 +122,7 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
   const ref = await svc.saveImage.call(svc, {
     data: sheet.png,
     mediaType: 'image/png',
-    name: `see-now-${Date.now()}.png`,
+    name: `vision-${Date.now()}.png`,
   });
   return {
     images: [ref],
@@ -139,7 +144,7 @@ export async function apply(ctx) {
     return await registerAll(ctx);
   } catch (e) {
     // 最坏的情况是插件不能用，不是应用起不来
-    try { ctx?.logger?.error?.(`[dsh-see-now] failed to load: ${e?.stack ?? e}`); } catch { /* ignore */ }
+    try { ctx?.logger?.error?.(`[vision-toggle] failed to load: ${e?.stack ?? e}`); } catch { /* ignore */ }
     if (process.env.DSH_SEE_DEBUG) throw e;
     return () => {};
   }
@@ -148,7 +153,7 @@ export async function apply(ctx) {
 async function registerAll(ctx) {
   const defineTool = await loadDefineTool();
   const disposers = [];
-  const log = (m) => { try { ctx?.logger?.info?.(`[dsh-see-now] ${m}`); } catch { /* ignore */ } };
+  const log = (m) => { try { ctx?.logger?.info?.(`[vision-toggle] ${m}`); } catch { /* ignore */ } };
 
   // DSH 桌面版把 ffmpeg 放在 `~/.dsh/tools/ffmpeg/bin`，**不进 PATH**。
   // 写裸 'ffmpeg' 在 macOS 上就是 ENOENT，而且会伪装成"插件坏了"。
@@ -167,6 +172,8 @@ async function registerAll(ctx) {
    * 用**函数**而不是快照：会话 id 由钩子随时更新，闭包里存值会让第一次之后全用旧的。
    */
   let lastSessionId = null;
+  // R23 数据源：会话模型信息（inject 声明里有 sessionController；拿不到时 modelInfoOf 返 null → 静态文案兜底）
+  const sc = serviceOf(ctx, 'sessionController') ?? null;
 
   /**
    * **逐帧 / 逐场景模式**（默认关）。
@@ -180,7 +187,6 @@ async function registerAll(ctx) {
    */
   let sceneMode = false;
   /** 节奏：calm / normal / dense（粘性）。**这是"省点钱"唯一能真的生效的旋钮。** */
-  let paceMode = DEFAULT_PACE;
   /** 循环是按哪个模式起的 —— 模式变了要重建，不然唤醒节奏还是旧的 */
   let loopScene = null;
   /** 切模式时那一句说明：下一次工具结果里带给模型，然后清掉 */
@@ -192,8 +198,15 @@ async function registerAll(ctx) {
    * 胶囊点击 → `applyMode`（这里说了算）；模型在会话里改 scene/pace/stop 参数 →
    * `currentMode` 归 null（胶囊显示"自定义"）。档位只决定初始参数，之后模型仍可微调。
    */
+  // 进程重启一律回关档（规格 §四）；config 只恢复用户的节奏/清晰度微调（工程规范 §二）
   let currentMode = DEFAULT_MODE;
+  const cfg0 = loadConfig({ log });
+  let paceMode = cfg0.pace ?? DEFAULT_PACE;
   let modeSeq = 0;
+  /** R24 自动挡决策器：auto 档时非 null；loop 每拍 poll，静止降档/建议关档走 onShift */
+  let autoPilot = null;
+  /** R21 黑名单（v1 无窗口标题源=接缝保留；status 暴露词条数供验证） */
+  const privacy = createPrivacy();
   const sseClients = new Set();
   const broadcastMode = () => {
     const line = 'data: ' + JSON.stringify({ type: 'mode', seq: ++modeSeq, mode: currentMode, at: Date.now() }) + '\n\n';
@@ -210,27 +223,42 @@ async function registerAll(ctx) {
    */
   const applyMode = async (modeId, { confirmed = false } = {}) => {
     const m = MODES[modeId];
-    if (!m) return { ok: false, error: `未知档位：${modeId}` };
+    if (!m) return { ok: false, code: 101, error: `未知档位：${modeId}` };
     if (modeId === 'ultra' && currentMode !== 'ultra' && confirmed !== true) {
-      return { ok: false, error: 'confirm-needed', hint: '原画档每次开启需确认（满幅单帧，约 872 token/张）' };
+      // 401=需要确认 / 402=用户拒绝（规格 §七 错误码表，ERRORS.md 同源）
+      return { ok: false, code: 401, error: 'confirm-needed', hint: '原画档每次开启需确认（满幅单帧，约 872 token/张）' };
     }
     currentMode = modeId;
     sceneMode = Boolean(m.scene);
     if (m.pace) paceMode = m.pace;
     loopScene = null;
+    // auto 档挂决策器；离开 auto 档摘掉（O9：决策分层，档位升降只在这里落效果）
+    autoPilot = modeId === 'auto' ? createAutoPilot({
+      onShift: (s) => {
+        log(`自动挡：${s.why} → ${s.stop ? '建议关档' : `quality=${s.quality} pace=${s.pace}`}`);
+        if (s.stop) { void applyMode('off'); return; }
+        paceMode = s.pace;
+        // 静止降档要真生效得重建管线（cutAbs/quality 建管线时定死）；auto 档幂等重建
+        void applyMode('auto');
+      },
+      onFlag: (f) => { log(`预筛标记：worthReading=${f.worthReading}${f.reason ? ` (${f.reason})` : ''}`); },
+    }) : null;
     stopLoop('换档');
     try { runner.stop(); } catch { /* 没在跑 */ }
     if (!m.enabled) {
       log(`档位 → ${m.label}（采集停止）`);
       broadcastMode();
+      saveConfig({ mode: modeId, pace: paceMode, quality: m.quality }, { log });
       return { ok: true, mode: modeId, label: m.label };
     }
     const pace = m.pace ?? DEFAULT_PACE;
     const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[pace].cutAbs };
+    if (m.pullMode) opts.pullMode = true;   // B3/R20：拉取档位帧进环形缓冲
     const st = await runner.start({ src: { kind: 'screen' }, quality: m.quality, opts });
     if (m.wakeGapSec !== Infinity) ensureLoop();
-    log(`档位 → ${m.label}（quality=${m.quality} pace=${pace}${m.scene ? ' scene' : ''}）`);
+    log(`档位 → ${m.label}（quality=${m.quality} pace=${pace}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}）`);
     broadcastMode();
+    saveConfig({ mode: modeId, pace: paceMode, quality: m.quality }, { log });
     return { ok: true, mode: modeId, label: m.label, running: true, started: st };
   };
 
@@ -307,18 +335,10 @@ async function registerAll(ctx) {
       // 常规按节奏走（normal 15 秒 / calm 30 秒）—— 8 秒一次太吵，实报过。
       wakeMinGapSec: sceneMode ? 4 : PACES[paceMode].wakeGapSec,
       onStop: (reason) => {
-        if (reason === 'window-closed') {
-          // 用户关窗 = 不看了。**落进待领说明**，下一次工具结果带走。
-          // 不能写 chat.jsonl：窗已经关了，那条流没人看，模型也拿不到 ——
-          // 实测会连写两条，而模型还在说"我还在看"。
-          try { runner.note(HANGUP_NOTE); } catch { /* 记不住也要停 */ }
-          // **必须用 hangUp 而不是 stop**：stop 只是停采集，下一条 watch 会立刻
-          // 重启并把窗重新开起来 —— 用户体感是"关掉又弹出来，只能卸载插件"。
-          try { runner.hangUp(); } catch { /* 已经停了 */ }
-          return;
-        }
         try { runner.stop(); } catch { /* 已经停了 */ }
       },
+      // R24：autoMode 心跳驱动（静止降档/15min 建议关档都是时间统计）
+      onTick: (now) => { try { autoPilot?.poll(now); } catch { /* 决策器坏了不影响循环 */ } },
     });
     log(`常驻循环已启动（会话 ${sid ?? '未知'}）`);
     return loop;
@@ -339,7 +359,7 @@ async function registerAll(ctx) {
   };
 
   const toolObj = {
-    ...seeNowToolSpec(),
+    ...visionToolSpec(),
     async execute(args = {}, run = {}) {
       // 第二个参数是宿主的 `ToolRunContext`：`signal` 是"这一轮被取消了"的唯一通知。
       // 它只交给**阻塞等待**（watch）；常驻循环不挂它，理由见 ensureLoop。
@@ -423,7 +443,7 @@ async function registerAll(ctx) {
         if (sceneMode && requestedMinFrames > 1) {
           pendingModeNote = [
             `逐帧模式下每张图只有 1 帧，\`minFrames: ${requestedMinFrames}\` 这条路上不生效（已按 1 处理）。`
-            + '要按帧数攒图，先 `see_now({scene:false})`。',
+            + '要按帧数攒图，先 `vision({scene:false})`。',
             pendingModeNote,
           ].filter(Boolean).join('\n\n');
         }
@@ -446,7 +466,7 @@ async function registerAll(ctx) {
           if (r.reason === 'hung-up') {
             return {
               text: '用户已经关掉了悬浮窗，这一轮看屏幕结束了。\n'
-                + '**不要再调 `see_now`**。等用户明确说要看（或者重新打开窗口）再开始。',
+                + '**不要再调 `vision`**。等用户明确说要看再开始（胶囊或让他调 `vision`）。',
               meta: { ok: false, reason: 'hung-up' },
             };
           }
@@ -462,14 +482,14 @@ async function registerAll(ctx) {
           if (r.reason === 'cancelled') {
             return {
               text: '这一轮被取消了（用户按了停止，或者调用超时），等待已经结束。\n'
-                + '他想接着看时说一声，再调 `see_now({action:"watch"})`。',
+                + '他想接着看时说一声，再调 `vision({action:"peek"})`。',
               meta: { ok: false, reason: 'cancelled', waited: +r.waited.toFixed(1) },
             };
           }
           if (r.userText) {
             return {
               text: `用户刚说话：「${r.userText}」——但这一刻还没收到画面（刚开或刚发完）。\n`
-                + '先回答他，需要看图就再调一次 `see_now`。',
+                + '先回答他，需要看图就再调一次 `vision({action:"peek"})`。',
               meta: { ok: false, reason: r.reason, userText: r.userText, waited: +r.waited.toFixed(1) },
             };
           }
@@ -505,8 +525,8 @@ async function registerAll(ctx) {
           return {
             text: '手上还没有画面（刚开或刚发完，下一张还在攒）。\n'
               + (silentMode
-                ? '静默档不主动叫你 —— 攒着的图等你 peek。要看此刻可以调 `see_now({action:"watch"})`。'
-                : `循环${!lp || lp.stopped() ? '没在跑' : '在跑'} —— 攒够我会叫你；要看此刻可以调 \`see_now({action:"watch"})\`。`),
+                ? '静默档不主动叫你 —— 攒着的图等你 peek。要看此刻可以调 `vision({action:"peek"})`。'
+                : `循环${!lp || lp.stopped() ? '没在跑' : '在跑'} —— 攒够我会叫你；要看此刻可以调 \`vision({action:"peek"})\`。`),
             meta: { ok: false, reason: 'no-sheet', loop: lp?.state() ?? null, mode: currentMode },
           };
         }
@@ -546,7 +566,10 @@ async function registerAll(ctx) {
                 + `，会话 ${lp.session ?? '未知'}）`
               : lp?.reason ? `已停（${lp.reason}）` : '没起（还没调过 watch）'}`
             // 手上有没有攒着没取走的图 —— `pending` 一直是 1 时模型不会收到新图，只会一直被叫
-            + `\n队列：${s.pending ? `有 ${s.pending} 张没取走（出图序号 ${s.sheets}）` : '空'}`
+            + `\n队列：${s.pull
+              ? (s.buffered?.count ? `缓冲 ${s.buffered.count} 帧 / ${s.buffered.mb}MB（上限 ${s.buffered.mbMax}MB）` : '缓冲空（等画面变化）')
+              : (s.pending ? `有 ${s.pending} 张没取走（出图序号 ${s.sheets}）` : '空')}`
+            + `\n隐私：黑名单 ${privacy.size} 词条（本地匹配 · 零留痕）`
             // 模式：逐帧时一张图只有一帧、铺满；常规是多帧拼格
             + `\n模式：${sceneMode ? '逐帧（一张图 = 一个场景，铺满）' : '常规（多帧拼一张）'}`
             + ` · 节奏：${sceneMode ? 'dense（跟逐帧走）' : paceMode}`
@@ -590,6 +613,16 @@ async function registerAll(ctx) {
           scene: sceneMode,
           pace: paceMode,
           loop: loop?.state() ?? null,
+        });
+      }
+      if (req.method === 'GET' && p === '/dialog') {
+        // R23：客户端弹窗直接拿文案（token 估算集中在 dialog.js，client 不复算）
+        const info = modelInfoOf(sc, lastSessionId ?? null);
+        return json(res, 200, {
+          ok: true,
+          model: info?.name ?? null,
+          contextTokens: info?.contextTokens ?? null,
+          text: ultraDialogText(info),
         });
       }
       if (req.method === 'POST' && p === '/mode') {

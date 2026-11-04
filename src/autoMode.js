@@ -134,17 +134,16 @@ export function createAutoPilot({ onShift = () => {}, onFlag = () => {} } = {}) 
       return;
     }
     if (state === 'off' || state === 'suspended') return;
-    { // 守卫反转后的裸块：配对原 if 块残留的闭合 }
-      const still = now - lastActivityAt;
-      if (still >= STILL_STOP_MS) {
-        onShift({ quality, pace, why: 'still-15min', stop: true, state });
-        state = 'off'; // 建议停止后决策器归零，重启进程回关档（§四）
-        return;
-      }
-      if (still >= STILL_CALM_MS) {
-        setQuality(AUTO_CALM.quality, 'still-5min');
-        setPace(AUTO_CALM.pace, 'still-5min');
-      }
+    // 静止判定：5 分钟降费档、15 分钟建议关闭（R28 还原裸块为直排代码）
+    const still = now - lastActivityAt;
+    if (still >= STILL_STOP_MS) {
+      onShift({ quality, pace, why: 'still-15min', stop: true, state });
+      state = 'off'; // 建议停止后决策器归零，重启进程回关档（§四）
+      return;
+    }
+    if (still >= STILL_CALM_MS) {
+      setQuality(AUTO_CALM.quality, 'still-5min');
+      setPace(AUTO_CALM.pace, 'still-5min');
     }
   }
 

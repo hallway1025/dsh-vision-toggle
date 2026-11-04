@@ -35,7 +35,7 @@ const DEFAULT_P50_MS = 200;
  * @param {Function|null} [opts.evaluateImpl=null] v2 注入；形状 async (frame) => {worthReading, reason?}
  * @param {number} [opts.windowSize=12] 滑动窗口
  * @param {number} [opts.p50LimitMs=200] 降速阈值
- * @param {number} [opts.timeoutMs=1000] 单次评估挂起上限——不中断调用方（R8 不 await），
+ * @param {number} [opts.timeoutMs=1000] 单次评估挂起上限（R29：1000ms = 防挂死容忍，约 5 倍正常评估尾延迟的余量——非性能目标；挂起只降级为跳帧，绝不中断调用方 R8 不 await），
  *   只把返回值降为 sentinel-timeout
  */
 export function createSentinel({

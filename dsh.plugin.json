@@ -1,6 +1,6 @@
 {
   "name": "dsh-vision-toggle",
-  "description": "Let DSH watch a live screen or camera feed: score frames by how much the picture changes, pack the important ones into a 4x4 sheet, and push it into the session.",
+  "description": "Vision for DSH with pull-mode framing: score frames by change, buffer them in memory (48MB ring), and let the model peek a composed sheet on demand. Five modes (off/silent/dynamic/ultra/auto), zero disk writes, privacy blocklist seam.",
   "version": "0.1.0",
   "entry": {
     "name": "dsh-vision-toggle",
