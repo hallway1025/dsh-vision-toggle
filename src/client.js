@@ -530,7 +530,7 @@ window.__ModuleLoader__.load({
           try {
             const d = await api('/dialog')
             ok = await askConfirm(d.text || '原画档成本较高，确认开启？')
-          } catch { ok = await askConfirm('原画档：满幅单帧（最贵一档）。确认开启？') }
+          } catch { ok = await askConfirm('原画档：高消耗，约每分钟 6,976 token。确认开启？') }
           if (!ok) return
         }
         const prev = modeRef.current
