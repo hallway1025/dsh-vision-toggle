@@ -1,0 +1,7 @@
+.tmp/
+*.log
+node_modules/
+# 测试素材（可重合成）
+test-*.mp4
+# ffmpeg/PS 把 %VAR% 当字面目录名的运行产物
+%SystemDrive%/
