@@ -427,7 +427,6 @@ window.__ModuleLoader__.load({
                 ) : null,
               ),
               h('div', { className: 'vts-bar' },
-                h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px', padding: '0 6px', whiteSpace: 'nowrap' } }, '拖动框选 · 松手进入标注'),
                 h('button', { type: 'button', title: '全屏（不框选直接标注）', onClick: () => confirmCrop(true), className: 'vts-btn', style: { background: '#2ea44f', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '全屏'),
                 h('button', { type: 'button', title: '退出截图（Esc 同效）', onClick: onClose, className: 'vts-btn', style: { background: '#d29922', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '✕ 退出'),
               ),
@@ -466,9 +465,6 @@ window.__ModuleLoader__.load({
           onBlur: commitText,
           style: { position: 'fixed', left: txt.cx + 'px', top: txt.cy + 'px', zIndex: 4, fontSize: '18px', padding: '4px 8px', borderRadius: '6px', border: '2px solid #4f7cff', background: 'rgba(255,255,255,.95)', color: '#111' },
         }) : null,
-        // 底部提示
-        h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } },
-          phase === 'crop' ? 'Esc 关闭' : '标注后 ✓ 贴进聊天框 · 滚轮缩放 · Space/中键拖动平移 · Esc 关闭'),
       ))
     }
 
