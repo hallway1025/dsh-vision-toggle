@@ -85,6 +85,7 @@ window.__ModuleLoader__.load({
       const [mode, setMode] = useState(undefined)
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState(null)
+      const [hint, setHint] = useState(null) // 截图键轻提示（非错误）
       // R23 自定义弹窗：text=正文，resolve 由按钮回调完成（Promise 挂在 ref 上）
       const [confirmText, setConfirmText] = useState(null)
       const confirmResolve = useRef(null)
@@ -165,27 +166,41 @@ window.__ModuleLoader__.load({
       }
 
       const snap = async () => {
+        // 截图键 v2：gdigrab 原生分辨率，A 路（服务端 Electron 粘贴）直进聊天框；
+        // 不可达时服务端回 base64，这里写剪贴板兜底（B 路），再不行转下载。
         if (busy) return
-        setBusy(true); setErr(null)
+        setBusy(true); setErr(null); setHint(null)
         try {
-          const r = await fetch(API + '/snapshot', { method: 'POST' })
-          if (!r.ok) {
-            let msg = 'HTTP ' + r.status
-            try { const j = await r.json(); if (j && j.error) msg = j.error } catch {}
-            throw new Error(msg)
+          const r = await fetch(API + '/screenshot', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+          })
+          const j = await r.json()
+          if (!r.ok) throw new Error(j?.error || 'HTTP ' + r.status)
+          if (j.delivered === 'pasted') {
+            setHint('截图已贴到输入框'); setTimeout(() => setHint(null), 2600)
+            return
           }
-          // 纯内存：PNG 字节 → blob URL → 新页签预览（P3：不落盘）
-          const blob = await r.blob()
-          const url = URL.createObjectURL(blob)
-          const w = window.open(url, '_blank')
-          if (!w) { // 弹窗被拦就转下载
-            const a = document.createElement('a')
-            a.href = url; a.download = 'vision-snap-' + Date.now() + '.png'; a.click()
+          // clipboard-only（服务端已写剪贴板）或 unavailable（前端来写）
+          if (j.delivered === 'unavailable' && j.png) {
+            const bin = atob(j.png)
+            const bytes = new Uint8Array(bin.length)
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+            try {
+              await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })])
+            } catch { return downloadBase64Png(j.png) }
           }
-          setTimeout(() => URL.revokeObjectURL(url), 60000)
+          setHint('截图已复制剪贴板，聊天框 Ctrl+V 粘贴'); setTimeout(() => setHint(null), 5000)
         } catch (e) {
           setErr(e.message); setTimeout(() => setErr(null), 4000)
         } finally { setBusy(false) }
+      }
+      const downloadBase64Png = (b64) => {
+        const bin = atob(b64); const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }))
+        const a = document.createElement('a')
+        a.href = url; a.download = 'vision-snap-' + Date.now() + '.png'; a.click()
+        setTimeout(() => URL.revokeObjectURL(url), 60000)
       }
 
       // —— 2 键 UI v3（m08444：线条截图图标 + GPT 思考深度式档位菜单 + 自定义清晰度入口）——
@@ -340,6 +355,7 @@ window.__ModuleLoader__.load({
           ),
         ) : null,
         err ? h('span', { title: err, style: { fontSize: '11px', color: '#e05252', marginLeft: '2px' } }, '⚠') : null,
+        hint ? h('span', { title: hint, style: { fontSize: '11px', color: 'var(--dsh-primary-color, #4f7cff)', marginLeft: '2px', cursor: 'default' } }, hint.length > 14 ? '✓' : '✓ ' + hint) : null,
         confirmText ? h('div', { style: overlayStyle },
           h('div', { style: dialogStyle },
             h('div', { style: dialogTextStyle }, confirmText),
