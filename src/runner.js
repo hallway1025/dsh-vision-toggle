@@ -73,28 +73,29 @@ export const PACES = Object.freeze({
 export const DEFAULT_PACE = 'normal';
 
 /**
- * 五档模式表（S2 · 规格 §四 C2；S4 起行为接线）。
+ * 六档模式表（0.3.0 重定义 · 主人拍板 off/low/high/max/ultra + 自定义）。
  *
- * 每档是一组参数组合；createRunner 消费本表：`pullMode:true` 的档位（silent/dynamic/auto）
+ * 每档是一组参数组合；createRunner 消费本表：`pullMode:true` 的档位（low/high/max/custom）
  * 走 B3 拉取模式（采集→环形缓冲，出图按需组）；ultra 保留推送（scene 满幅单帧）。
  *
  * | 档 | 语义 | 成本形态 |
  * |---|---|---|
  * | off     | 采集进程停止、缓冲清空、peek 返回 102 | 零 |
- * | silent  | 常驻采集，不主动唤醒；仅模型 peek 时出图 | floor 帧底价 |
- * | dynamic | 自动升降 quality（密度驱动 tiers）+pace 适配 | 按屏幕活动 |
+ * | low     | 大动作才留帧（cutAbs 20 预筛），不叫模型，peek 按需出图 | floor 帧底价 |
+ * | high    | 过线帧全进池（cutAbs 12），不叫模型，peek 按需出图 | 按屏幕活动 |
+ * | max     | 同 high 采集，dense 灵敏门槛（cutAbs 7）——持续感知全进池，不叫模型 | 最密帧流 |
  * | ultra   | 满幅单帧 + 每次开启弹窗警告确认 | 872tok/张按需 |
- * | auto    | 按屏幕活动度与内容价值自适应选档，参数级自主 | 自适应 |
+ * | custom  | 用户自由组合参数（config 的 quality × pace，applyMode 传入） | 按所选参数 |
  *
  * 字段约定：
  * - enabled:false 表示采集进程应停止（关档语义）。
  * - wakeGapSec:null = 跟随 PACES[pace].wakeGapSec；Infinity = 不主动唤醒。
  * - scene:true 时走 SCENE_OPTS（满幅单帧），唤醒间隔硬编码 4s（规格 §三 R1）。
- * - auto 档参数同 dynamic 起步，自适应升降由 autoMode.js 决策器驱动（S4，O9 纯代码层）。
+ * - high/max 采集行为同为「过线帧全进池、零投递」，差别只在门槛：max 用 dense（cutAbs 7）最灵敏。
  */
 export const MODES = Object.freeze({
   off: Object.freeze({
-    label: '关',
+    label: 'off',
     enabled: false,
     quality: null,
     pace: null,
@@ -102,8 +103,8 @@ export const MODES = Object.freeze({
     scene: false,
     wakeGapSec: null,
   }),
-  silent: Object.freeze({
-    label: '静默',
+  low: Object.freeze({
+    label: 'low',
     enabled: true,
     quality: 'low',
     pace: 'calm',
@@ -112,18 +113,28 @@ export const MODES = Object.freeze({
     wakeGapSec: Infinity,
     pullMode: true,
   }),
-  dynamic: Object.freeze({
-    label: '动态',
+  high: Object.freeze({
+    label: 'high',
     enabled: true,
     quality: 'standard',
     pace: 'normal',
+    minFrames: 1,
+    scene: false,
+    wakeGapSec: Infinity,
+    pullMode: true,
+  }),
+  max: Object.freeze({
+    label: 'max',
+    enabled: true,
+    quality: 'standard',
+    pace: 'dense',
     minFrames: 1,
     scene: false,
     wakeGapSec: null,
     pullMode: true,
   }),
   ultra: Object.freeze({
-    label: '原画',
+    label: 'ultra',
     enabled: true,
     quality: 'ultra',
     pace: 'normal',
@@ -131,14 +142,14 @@ export const MODES = Object.freeze({
     scene: true,
     wakeGapSec: 4,
   }),
-  auto: Object.freeze({
-    label: '自动',
+  custom: Object.freeze({
+    label: '自定义',
     enabled: true,
     quality: 'standard',
     pace: 'normal',
     minFrames: 1,
     scene: false,
-    wakeGapSec: null,
+    wakeGapSec: Infinity,
     pullMode: true,
   }),
 });

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-11-04（六档重定义）
+
+挡位全换：off / low / high / max / ultra / 自定义（主人 m08539/m08564/m08582 拍板）：
+
+- **旧档删除**：silent/dynamic/auto 不再存在；config 旧值静默迁移（silent→low、dynamic→high、auto→high）。
+- **零投递口径**：low（门槛 20 大动作预筛）/ high（门槛 12 全进池）/ max（门槛 7 最灵敏持续感知）全部只进缓存池、不叫模型——模型回合自主 peek，聊天框零打扰。
+- **ultra**：满幅逐帧保留；确认弹窗文案改「每分钟预估消耗」（2k～26k tok/分钟，有 model-info 时附上下文占比/分钟）。
+- **自定义=独立挡位**：子面板两组参数（清晰度 4 档 × 节奏 3 档）自由组合，改动即生效。
+- **截图键全档可用**：pull 档走 peekSheet（不消费帧，不抢模型的图）；删除 409「常驻唤醒在跑」拒绝闸（S3 后 peek 不取走，闸已失据）。
+- **删 autoPilot / autoMode.js**（auto 档决策器成死代码）；修 applyMode 内 pace 撞名（SyntaxError）与 log 行 ${pace} 陈旧引用（运行时 ReferenceError）。
 ## 0.2.0 — 2026-11-04（主动看改造）
 
 核心语义从「被动推送唤醒」改为「主动拉取观看」（Active viewing, not push）：

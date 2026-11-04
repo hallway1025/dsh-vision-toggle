@@ -11,7 +11,6 @@ import { resolveFfmpeg } from './binaries.js';
 import { visionToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
 import { startLoop } from './loop.js';
 import { loadConfig, saveConfig } from './config.js';
-import { createAutoPilot } from './autoMode.js';
 import { createPrivacy } from './privacy.js';
 import { modelInfoOf } from './model-info.js';
 import { ultraDialogText } from './dialog.js';
@@ -193,7 +192,7 @@ async function registerAll(ctx) {
   let pendingModeNote = '';
 
   /**
-   * **五档状态（胶囊为主，规格 §四 / 决策 5）**：off / silent / dynamic / ultra / auto。
+   * **六档状态（0.3.0 重定义 · 主人拍板）**：off / low / high / max / ultra / custom（自定义）。
    *
    * 胶囊点击 → `applyMode`（这里说了算）；模型在会话里改 scene/pace/stop 参数 →
    * `currentMode` 归 null（胶囊显示"自定义"）。档位只决定初始参数，之后模型仍可微调。
@@ -203,8 +202,6 @@ async function registerAll(ctx) {
   const cfg0 = loadConfig({ log });
   let paceMode = cfg0.pace ?? DEFAULT_PACE;
   let modeSeq = 0;
-  /** R24 自动挡决策器：auto 档时非 null；loop 每拍 poll，静止降档/建议关档走 onShift */
-  let autoPilot = null;
   /** R21 黑名单（v1 无窗口标题源=接缝保留；status 暴露词条数供验证） */
   const privacy = createPrivacy();
   const sseClients = new Set();
@@ -221,7 +218,7 @@ async function registerAll(ctx) {
    * 不需要仿 watch 的 optsSig 重启路（那条路是给**阻塞 watch** 中途换参用的）。
    * 原画每次开启需确认（规格 §四）；关 = 采集停止，缓冲随 teardown 排空。
    */
-  const applyMode = async (modeId, { confirmed = false } = {}) => {
+  const applyMode = async (modeId, { confirmed = false, quality = null, pace = null } = {}) => {
     const m = MODES[modeId];
     if (!m) return { ok: false, code: 101, error: `未知档位：${modeId}` };
     if (modeId === 'ultra' && currentMode !== 'ultra' && confirmed !== true) {
@@ -230,19 +227,10 @@ async function registerAll(ctx) {
     }
     currentMode = modeId;
     sceneMode = Boolean(m.scene);
-    if (m.pace) paceMode = m.pace;
+    paceMode = modeId === 'custom'
+      ? (pace && PACES[pace] ? pace : paceMode)   // 自定义：用面板传入的节奏，没传就保持现状
+      : (m.pace ?? paceMode);                      // 固定档：档位自带节奏
     loopScene = null;
-    // auto 档挂决策器；离开 auto 档摘掉（O9：决策分层，档位升降只在这里落效果）
-    autoPilot = modeId === 'auto' ? createAutoPilot({
-      onShift: (s) => {
-        log(`自动挡：${s.why} → ${s.stop ? '建议关档' : `quality=${s.quality} pace=${s.pace}`}`);
-        if (s.stop) { void applyMode('off'); return; }
-        paceMode = s.pace;
-        // 静止降档要真生效得重建管线（cutAbs/quality 建管线时定死）；auto 档幂等重建
-        void applyMode('auto');
-      },
-      onFlag: (f) => { log(`预筛标记：worthReading=${f.worthReading}${f.reason ? ` (${f.reason})` : ''}`); },
-    }) : null;
     stopLoop('换档');
     try { runner.stop(); } catch { /* 没在跑 */ }
     if (!m.enabled) {
@@ -251,16 +239,17 @@ async function registerAll(ctx) {
       saveConfig({ mode: modeId, pace: paceMode, quality: m.quality }, { log });
       return { ok: true, mode: modeId, label: m.label };
     }
-    const pace = m.pace ?? DEFAULT_PACE;
-    const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[pace].cutAbs };
+    const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[paceMode].cutAbs };
     if (m.pullMode) opts.pullMode = true;   // B3/R20：拉取档位帧进环形缓冲
-    const st = await runner.start({ src: { kind: 'screen' }, quality: m.quality, opts });
+    // 清晰度覆盖（0.3.0）：low/high/max/custom 四档接受；off 无采集，ultra 固定满幅不降
+    const effQ = ['low', 'standard', 'high'].includes(quality) && modeId !== 'off' && modeId !== 'ultra' ? quality : m.quality;
+    const st = await runner.start({ src: { kind: 'screen' }, quality: effQ, opts });
     // 主动看改造：拉取档统一起**监护循环**（只攒帧+心跳，零投递）；ultra 推送档不用。
     if (m.pullMode) ensureLoop();
-    log(`档位 → ${m.label}（quality=${m.quality} pace=${pace}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}）`);
+    log(`档位 → ${m.label}（quality=${effQ} pace=${paceMode}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}${effQ !== m.quality ? ' 自定义' : ''}）`);
     broadcastMode();
-    saveConfig({ mode: modeId, pace: paceMode, quality: m.quality }, { log });
-    return { ok: true, mode: modeId, label: m.label, running: true, started: st };
+    saveConfig({ mode: modeId, pace: paceMode, quality: effQ }, { log });
+    return { ok: true, mode: modeId, label: m.label, quality: effQ, running: true, started: st };
   };
 
   if (typeof ctx.on === 'function') {
@@ -327,8 +316,6 @@ async function registerAll(ctx) {
       onStop: (reason) => {
         try { runner.stop(); } catch { /* 已经停了 */ }
       },
-      // R24：autoMode 心跳驱动（静止降档/15min 建议关档都是时间统计）
-      onTick: (now) => { try { autoPilot?.poll(now); } catch { /* 决策器坏了不影响循环 */ } },
     });
     log('采集监护已启动（攒帧+心跳，零投递）');
     return loop;
@@ -612,13 +599,27 @@ async function registerAll(ctx) {
         const body = await readBody(req);
         let args = {};
         try { args = body ? JSON.parse(body) : {}; } catch { return json(res, 400, { error: 'body 不是合法 JSON' }); }
-        const r = await applyMode(String(args.mode ?? ''), { confirmed: args.confirmed === true });
+        const r = await applyMode(String(args.mode ?? ''), {
+          confirmed: args.confirmed === true,
+          quality: typeof args.quality === 'string' ? args.quality : null,
+          pace: typeof args.pace === 'string' ? args.pace : null,
+        });
         return json(res, r.ok ? 200 : 400, r);
       }
       if (req.method === 'POST' && p === '/snapshot') {
-        // 常驻唤醒在跑时 peek 会**抢走模型的图**（peek=取走语义）→ 拒绝；只在 关/静默/自定义-停 用
-        if (loop && !loop.stopped()) {
-          return json(res, 409, { error: '常驻唤醒在跑，截图会抢模型的图 —— 截图键只在 关/静默 档可用' });
+        // 0.3.0 全档可截图：pull 档走 peekSheet（**不消费帧**，不抢模型的图）；
+        // 推送档（ultra）与关档走 flush 队列 / 临时拉起（旧路径）。
+        const stSnap = runner.status();
+        if (stSnap.pull && stSnap.running) {
+          let sheetB = null;
+          for (let i = 0; !sheetB && i < 20; i++) {
+            try { sheetB = runner.peekSheet?.(1, 0) ?? null; } catch { sheetB = null; }
+            if (!sheetB) await new Promise((r2) => setTimeout(r2, 150));
+          }
+          if (!sheetB) return json(res, 504, { error: '缓冲还没攒出帧，稍等一两秒再截' });
+          res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+          res.end(sheetB);
+          return;
         }
         const wasRunning = Boolean(runner.status().running);
         if (!wasRunning) {

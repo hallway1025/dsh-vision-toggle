@@ -18,7 +18,11 @@ const FILE = path.join(DIR, 'config.json');
 function sanitize(raw) {
   const out = {};
   const m = raw?.mode;
-  out.mode = ['off', 'silent', 'dynamic', 'ultra', 'auto'].includes(m) ? m : 'off';
+  // 0.3.0 六档重命名；旧档位静默迁移（silent→low / dynamic→high / auto→high）
+  const LEGACY = { silent: 'low', dynamic: 'high', auto: 'high' };
+  out.mode = ['off', 'low', 'high', 'max', 'ultra', 'custom'].includes(m)
+    ? m
+    : (LEGACY[m] ?? 'off');
   const p = raw?.pace;
   out.pace = ['calm', 'normal', 'dense'].includes(p) ? p : 'normal';
   const q = raw?.quality;

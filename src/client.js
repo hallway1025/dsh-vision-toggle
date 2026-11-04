@@ -9,8 +9,8 @@
  * 通信面：GET /api/vision-toggle/status · POST /mode · POST /snapshot
  *         SSE /api/vision-toggle/events（档位变化广播）
  *
- * 槽位：conversation.input.model（模型选择器旁，m06074 实测定稿；right 槽已不存在，
- * 活案例 dsh-liangshen）。五档胶囊 + 截图键（规格 §四 / 决策 5）。
+ * 槽位：conversation.input.left（0.2.1 起让出 model 槽给原生模型选择器，m08294/m08342）。
+ * 五档胶囊 + 截图键 + 自定义清晰度（规格 §四 / 决策 5 / m08444）。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-vision-toggle',
@@ -20,18 +20,20 @@ window.__ModuleLoader__.load({
     const { createElement: h, useState, useEffect, useRef } = React
 
     const MODES = [
-      { id: 'off', label: '关' },
-      { id: 'silent', label: '静默' },
-      { id: 'dynamic', label: '动态' },
-      { id: 'ultra', label: '原画' },
-      { id: 'auto', label: '自动' },
+      { id: 'off', label: 'off' },
+      { id: 'low', label: 'low' },
+      { id: 'high', label: 'high' },
+      { id: 'max', label: 'max' },
+      { id: 'ultra', label: 'ultra' },
+      { id: 'custom', label: '自定义' },
     ]
     const TITLES = {
-      off: '视觉关：采集停止，peek 报 102',
-      silent: '静默：常驻采集攒帧不叫人，模型主动 peek（floor 帧底价）',
-      dynamic: '动态：自动升降清晰度 + 节奏适配（按屏幕活动计费）',
-      ultra: '原画：满幅单帧，每张约 872 token（最贵一档，推送不进缓冲）',
-      auto: '自动：拉取模式 + 静止 5 分钟自动降费、15 分钟建议关闭（决策器纯本地）',
+      off: 'off：视觉关，采集停止',
+      low: 'low：大动作才留帧进池，模型自主 peek（最省）',
+      high: 'high：过线帧全进缓存池，模型自主 peek',
+      max: 'max：最灵敏持续感知（门槛 7），全进池零打扰',
+      ultra: 'ultra：满幅逐帧拉满（开启有警告）',
+      custom: '自定义：清晰度 × 节奏自由组合',
     }
     const API = '/api/vision-toggle'
 
@@ -88,9 +90,13 @@ window.__ModuleLoader__.load({
       const confirmResolve = useRef(null)
       const modeRef = useRef(mode)
       modeRef.current = mode
-      // 2 键改版（m08294）：挡位键 + 截图键；挡位键点开滑块面板
+      // 2 键 UI（m08294 两键 / m08444 线条图标 + GPT 式档位菜单 + 自定义清晰度）
       const [open, setOpen] = useState(false)
+      const [view, setView] = useState('main') // 面板视图：main=档位列表 / custom=清晰度
+      const [qStatus, setQStatus] = useState(null) // 当前生效清晰度（/status 回显）
+      const [pStatus, setPStatus] = useState(null) // 当前生效节奏（/status 回显）
       const boxRef = useRef(null)
+      useEffect(() => { if (!open) setView('main') }, [open]) // 面板收起复位视图
       useEffect(() => {
         if (!open) return
         const away = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
@@ -150,6 +156,8 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ mode: id, confirmed: true }),
           })
           setMode(s.mode ?? id)
+          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null)
+          if (id === 'custom') setView('custom') // 自定义挡：停留子面板继续调参
         } catch (e) {
           setMode(prev); setErr(e.message)
           setTimeout(() => setErr(null), 4000)
@@ -180,14 +188,39 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
-      // —— 2 键 + 滑块换挡（m08294：截图一键 + 挡位一键，点开滑块选档）——
-      const ITEM_H = 28
+      // —— 2 键 UI v3（m08444：线条截图图标 + GPT 思考深度式档位菜单 + 自定义清晰度入口）——
+      const ITEM_H = 34        // 档位行高（单行，m08497 去短描述）
+      const ITEM_H_Q = 46      // 清晰度行高（两行带尺寸）
+      const DEFQ = { low: 'low', high: 'standard', max: 'standard', custom: 'standard' } // 档位默认清晰度（runner.js 映射镜像）
+      const PACES = [
+        { id: 'calm', label: '省静', desc: '门槛 20 · 大动作才算变' },
+        { id: 'normal', label: '日常', desc: '门槛 12 · 默认节奏' },
+        { id: 'dense', label: '灵敏', desc: '门槛 7 · 每一刀都留' },
+      ]
+      const QUALITIES = [
+        { id: 'low', label: '省流', desc: '800×450' },
+        { id: 'standard', label: '标准', desc: '1066×600' },
+        { id: 'high', label: '高清', desc: '1280×720' },
+        { id: 'ultra', label: '满幅', desc: '1600×900' },
+      ]
+      // 简约线条截图图标：取景框四角 + 中心点（stroke=currentColor 跟随主题）
+      const snapIcon = h('svg', { width: 15, height: 15, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', 'aria-hidden': 'true' },
+        h('path', { d: 'M5.5 2.5H4A1.5 1.5 0 0 0 2.5 4v1.5' }),
+        h('path', { d: 'M10.5 2.5H12A1.5 1.5 0 0 1 13.5 4v1.5' }),
+        h('path', { d: 'M13.5 10.5V12a1.5 1.5 0 0 1-1.5 1.5h-1.5' }),
+        h('path', { d: 'M2.5 10.5V12A1.5 1.5 0 0 0 4 13.5h1.5' }),
+        h('circle', { cx: 8, cy: 8, r: 1.4, fill: 'currentColor', stroke: 'none' }),
+      )
       const curIdx = Math.max(0, MODES.findIndex((m) => m.id === mode))
       const curLabel = MODES[curIdx]?.label ?? String(mode)
+      // 自定义=独立挡位（m08539/m08564）：任何档都能切，子面板两组参数（清晰度×节奏）
+      const effQ = qStatus ?? DEFQ[mode] ?? null
+      const qIdx = Math.max(0, QUALITIES.findIndex((q) => q.id === effQ))
+      const thumbIdx = view === 'custom' ? qIdx : curIdx
       const anchorStyle = { ...rowStyle, position: 'relative' }
       const panelStyle = {
         position: 'absolute', bottom: 'calc(100% + 8px)', left: 0,
-        minWidth: '104px', padding: '4px',
+        minWidth: '224px', padding: '4px',
         background: 'var(--dsh-bg-color, #fff)',
         border: '1px solid var(--dsh-border-color, rgba(127,127,127,0.35))',
         borderRadius: '10px', boxShadow: '0 6px 20px rgba(0,0,0,0.16)',
@@ -195,40 +228,115 @@ window.__ModuleLoader__.load({
       }
       const thumbStyle = {
         position: 'absolute', top: '4px', left: '4px',
-        width: 'calc(100% - 8px)', height: ITEM_H + 'px', borderRadius: '6px',
+        width: 'calc(100% - 8px)', height: (view === 'custom' ? ITEM_H_Q : ITEM_H) + 'px', borderRadius: '8px',
         background: 'var(--dsh-primary-color, #4f7cff)', opacity: 0.14,
-        transform: 'translateY(' + curIdx * ITEM_H + 'px)',
+        transform: 'translateY(' + thumbIdx * (view === 'custom' ? ITEM_H_Q : ITEM_H) + 'px)',
         transition: 'transform .22s cubic-bezier(.4, 0, .2, 1)',
       }
-      const itemStyle = (active) => ({
+      const itemStyle = (rowH) => ({
         display: 'block', width: '100%', textAlign: 'left',
-        fontSize: '12px', height: ITEM_H + 'px', lineHeight: ITEM_H + 'px',
-        padding: '0 10px', borderRadius: '6px', cursor: 'pointer', border: 'none',
-        background: 'transparent',
-        color: active ? 'var(--dsh-primary-color, #2563eb)' : 'inherit',
-        fontWeight: active ? 600 : 400,
+        height: rowH + 'px', padding: '0 10px', borderRadius: '8px',
+        cursor: 'pointer', border: 'none', background: 'transparent', color: 'inherit',
       })
+      const rowFlex = (active) => ({
+        height: '100%', display: 'flex', alignItems: 'center', gap: '8px',
+        color: active ? 'var(--dsh-primary-color, #2563eb)' : 'inherit',
+      })
+      const nameStyle = (active) => ({ fontSize: '12.5px', fontWeight: active ? 600 : 400, lineHeight: 1.3 })
+      const descStyle = { fontSize: '10.5px', opacity: 0.62, lineHeight: 1.3 }
+      const check = h('span', { style: { fontSize: '12px', fontWeight: 700 } }, '✓')
+      const footBtn = (label, onClick, title) => h('button', {
+        style: { display: 'block', width: '100%', textAlign: 'left', fontSize: '11.5px',
+          padding: '7px 10px', borderRadius: '8px', cursor: 'pointer', border: 'none',
+          background: 'transparent', color: 'inherit', opacity: 0.75,
+          borderTop: '1px solid var(--dsh-border-color, rgba(127,127,127,0.25))', marginTop: '4px' },
+        onClick, disabled: busy, title,
+      }, label)
+
+      const setCustom = async (patch) => { // 自定义挡参数：mode 固定 custom，patch 带 quality/pace（采集重启 ~0.6s）
+        if (busy) return
+        setBusy(true); setErr(null)
+        try {
+          const s = await api('/mode', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mode: 'custom', ...patch }),
+          })
+          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null)
+        } catch (e) { setErr(e.message); setTimeout(() => setErr(null), 4000) }
+        finally { setBusy(false) }
+      }
+      const togglePanel = () => {
+        const next = !open
+        setOpen(next)
+        if (next) api('/status').then((s) => { setQStatus(s.quality ?? null); setPStatus(s.pace ?? null) }).catch(() => {}) // 打开面板拉最新参数
+      }
+
       return h('div', { ref: boxRef, style: anchorStyle },
         h('button', {
-          title: '截图：绕过档位临时抓一帧（仅关/静默档可用）',
+          title: '截图：抓一帧另开预览（全挡可用，不打断采集）',
           onClick: snap, disabled: busy,
-          style: btnStyle(false),
-        }, '📷'),
+          style: { ...btnStyle(false), display: 'inline-flex', alignItems: 'center', padding: '5px 8px' },
+        }, snapIcon),
         h('button', {
           title: '视觉挡位：' + (TITLES[mode] ?? ''),
-          onClick: () => setOpen(!open), disabled: busy,
+          onClick: togglePanel, disabled: busy,
           style: { ...btnStyle(false), minWidth: '52px' },
         }, curLabel + (open ? ' ▾' : ' ▴')),
         open ? h('div', { style: panelStyle, role: 'listbox' },
-          h('div', { style: { position: 'relative' } },
-            h('div', { style: thumbStyle }),
-            MODES.map((m) => h('button', {
-              key: m.id,
-              title: TITLES[m.id],
-              onClick: () => { setOpen(false); pick(m.id) },
-              disabled: busy,
-              style: itemStyle(m.id === mode),
-            }, m.label)),
+          view === 'main' ? h('div', null,
+            h('div', { style: { position: 'relative' } },
+              h('div', { style: thumbStyle }),
+              MODES.map((m) => h('button', {
+                key: m.id,
+                title: TITLES[m.id],
+                // 延迟 420ms 收面板：滑块动画（.22s）播完再收（m08497「切换没用滑块效果」）
+                onClick: () => { pick(m.id); setTimeout(() => setOpen(false), 420) },
+                disabled: busy,
+                style: itemStyle(ITEM_H),
+              },
+                h('div', { style: rowFlex(m.id === mode) },
+                  h('div', { style: { ...nameStyle(m.id === mode), flex: 1 } }, m.label),
+                  m.id === mode ? check : null,
+                ),
+              )),
+            ),
+          ) : h('div', null,
+            h('div', { style: { fontSize: '11px', opacity: 0.65, padding: '3px 10px 7px' } },
+              '自定义挡参数（改动即生效，采集重启约 0.6 秒）'),
+            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '0 10px 3px' } }, '清晰度'),
+            h('div', { style: { position: 'relative' } },
+              h('div', { style: thumbStyle }),
+              QUALITIES.map((q) => h('button', {
+                key: q.id,
+                title: '切到 ' + q.label + '（' + q.desc + '）',
+                onClick: () => setCustom({ quality: q.id }), disabled: busy,
+                style: itemStyle(ITEM_H_Q),
+              },
+                h('div', { style: rowFlex(q.id === effQ) },
+                  h('div', { style: { flex: 1, minWidth: 0 } },
+                    h('div', { style: nameStyle(q.id === effQ) }, q.label),
+                    h('div', { style: descStyle }, q.desc),
+                  ),
+                  q.id === effQ ? check : null,
+                ),
+              )),
+            ),
+            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '6px 10px 3px' } }, '节奏（换画面的门槛）'),
+            PACES.map((p) => h('button', {
+              key: p.id,
+              title: '切到 ' + p.label + '（' + p.desc + '）',
+              onClick: () => setCustom({ pace: p.id }), disabled: busy,
+              style: itemStyle(ITEM_H),
+            },
+              h('div', { style: rowFlex(p.id === pStatus) },
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                  h('div', { style: nameStyle(p.id === pStatus) }, p.label),
+                  h('div', { style: descStyle }, p.desc),
+                ),
+                p.id === pStatus ? check : null,
+              ),
+            )),
+            footBtn('← 返回挡位', () => setView('main')),
           ),
         ) : null,
         err ? h('span', { title: err, style: { fontSize: '11px', color: '#e05252', marginLeft: '2px' } }, '⚠') : null,
@@ -264,3 +372,4 @@ window.__ModuleLoader__.load({
     return module.exports
   },
 })
+
