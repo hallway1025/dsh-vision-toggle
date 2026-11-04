@@ -589,6 +589,10 @@ async function registerAll(ctx) {
           quality: s.quality ?? null,
           pending: s.pending ?? 0,
           sheets: s.sheets ?? 0,
+          // 主动看改造：新帧计数与缓冲占用（模型回合里查 bufferedNew 决定看不看）
+          pull: Boolean(s.pull),
+          bufferedNew: s.bufferedNew ?? 0,
+          buffered: s.buffered ?? null,
           scene: sceneMode,
           pace: paceMode,
           loop: loop?.state() ?? null,
