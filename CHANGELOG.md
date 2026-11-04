@@ -10,6 +10,7 @@
 - **自定义=独立挡位**：子面板两组参数（清晰度 4 档 × 节奏 3 档）自由组合，改动即生效。
 - **截图键全档可用**：pull 档走 peekSheet（不消费帧，不抢模型的图）；删除 409「常驻唤醒在跑」拒绝闸（S3 后 peek 不取走，闸已失据）。
 - **删 autoPilot / autoMode.js**（auto 档决策器成死代码）；修 applyMode 内 pace 撞名（SyntaxError）与 log 行 ${pace} 陈旧引用（运行时 ReferenceError）。
+- **规格同步**：形式规格 v4.4（六档重定义版，memory/vision/vision_modes_spec.md）——拉取档零投递 wakeGapSec=∞、LEGACY 迁移、409 删除、ultra 每分钟口径、sentinel v2 预留。
 ## 0.2.0 — 2026-11-04（主动看改造）
 
 核心语义从「被动推送唤醒」改为「主动拉取观看」（Active viewing, not push）：
