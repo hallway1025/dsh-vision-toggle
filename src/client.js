@@ -192,7 +192,7 @@ window.__ModuleLoader__.load({
 
       // 滚轮缩放（edit 阶段；fit 态以当前实际显示比例为基准；以鼠标为锚点补偿滚动）
       useEffect(() => {
-        if (phase !== 'edit') return
+        if (!ready) return
         const wrap = wrapRef.current
         if (!wrap) return
         const onWheel = (e) => {
@@ -216,7 +216,7 @@ window.__ModuleLoader__.load({
         }
         wrap.addEventListener('wheel', onWheel, { passive: false })
         return () => wrap.removeEventListener('wheel', onWheel)
-      }, [phase])
+      }, [ready])
 
       function drawOp(g, op) {
         g.strokeStyle = op.c; g.fillStyle = op.c; g.lineWidth = op.w
