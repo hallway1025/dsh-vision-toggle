@@ -80,12 +80,175 @@ window.__ModuleLoader__.load({
       transition: 'opacity .12s, background .12s',
     })
 
+    // ── 截图编辑层（React 版，2026-11-05 重写）──
+    // 旧版 document.body 命令式孤儿层锁死 UI（m09567 事故：✗/✓ 无响应只能重启宿主）。
+    // 新版：React 条件渲染（卸载即消失，无孤儿层）+ 四道保底闸：
+    //   ①Esc capture 关闭 ②150s watchdog 硬关 ③点容器空白关闭 ④图片加载失败自动关。
+    // canvas 走 replaced element max 约束自适应视口（保比例）；鼠标坐标经
+    // getBoundingClientRect 实测映射（修正截图分辨率≠视口的拉伸错位）。
+    function ShotEditor({ png, onClose, onDone, onResnap }) {
+      const cvRef = useRef(null)
+      const stRef = useRef({ ops: [], redo: [], base: null, drawing: null })
+      const [tool, setTool] = useState('rect')
+      const [color, setColor] = useState('#ff3b30')
+      const [txt, setTxt] = useState(null) // {cx,cy,px,py} 文字输入框位置（屏幕+图像坐标）
+      const [txtVal, setTxtVal] = useState('')
+      const txtValRef = useRef('')
+      const [ready, setReady] = useState(false)
+      const st = stRef.current
+
+      // 图片加载：成功铺底；失败自动关（保底闸④）
+      useEffect(() => {
+        const img = new Image()
+        img.onload = () => {
+          const cv = cvRef.current
+          if (!cv) return
+          cv.width = img.naturalWidth; cv.height = img.naturalHeight
+          st.base = img
+          setReady(true)
+          redraw()
+        }
+        img.onerror = () => onClose()
+        img.src = 'data:image/png;base64,' + png
+      }, [png])
+
+      // Esc（capture，保底闸①）+ 150s watchdog（保底闸②）；React 卸载必然 cleanup
+      useEffect(() => {
+        const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+        window.addEventListener('keydown', key, true)
+        const guard = setTimeout(() => { try { onClose() } catch {} }, 150000)
+        return () => { window.removeEventListener('keydown', key, true); clearTimeout(guard) }
+      }, [])
+
+      function drawOp(g, op) {
+        g.strokeStyle = op.c; g.fillStyle = op.c; g.lineWidth = op.w
+        g.lineCap = 'round'; g.lineJoin = 'round'
+        if (op.t === 'rect') {
+          g.strokeRect(Math.min(op.x, op.x2), Math.min(op.y, op.y2), Math.abs(op.x2 - op.x), Math.abs(op.y2 - op.y))
+        } else if (op.t === 'arr') {
+          const a = Math.atan2(op.y2 - op.y, op.x2 - op.x), hLen = Math.max(10, op.w * 4)
+          g.beginPath(); g.moveTo(op.x, op.y); g.lineTo(op.x2, op.y2)
+          g.lineTo(op.x2 - hLen * Math.cos(a - 0.45), op.y2 - hLen * Math.sin(a - 0.45))
+          g.moveTo(op.x2, op.y2); g.lineTo(op.x2 - hLen * Math.cos(a + 0.45), op.y2 - hLen * Math.sin(a + 0.45))
+          g.stroke()
+        } else if (op.t === 'text') {
+          g.font = (op.w * 6 + 12) + 'px system-ui,sans-serif'; g.fillText(op.s, op.x, op.y)
+        } else if (op.t === 'mos') {
+          const cv = cvRef.current
+          const x0 = Math.max(0, Math.min(op.x, op.x2)), y0 = Math.max(0, Math.min(op.y, op.y2))
+          const w = Math.min(cv.width - x0, Math.abs(op.x2 - op.x)), hgt = Math.min(cv.height - y0, Math.abs(op.y2 - op.y))
+          if (w < 1 || hgt < 1) return
+          const t = document.createElement('canvas'); const sz = 14
+          t.width = Math.ceil(w / sz); t.height = Math.ceil(hgt / sz)
+          t.getContext('2d').drawImage(st.base, x0, y0, w, hgt, 0, 0, t.width, t.height) // 永远原图取样
+          g.imageSmoothingEnabled = false
+          g.drawImage(t, x0, y0, w, hgt)
+          g.imageSmoothingEnabled = true
+        }
+      }
+      function redraw(extra) {
+        const cv = cvRef.current; if (!cv) return
+        const g = cv.getContext('2d')
+        g.clearRect(0, 0, cv.width, cv.height)
+        if (st.base) g.drawImage(st.base, 0, 0)
+        for (const op of st.ops) drawOp(g, op)
+        if (extra) drawOp(g, extra)
+      }
+      const toImg = (e) => {
+        const cv = cvRef.current; const r = cv.getBoundingClientRect()
+        return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }
+      }
+      // 拖动跟随挂 window（拖出画布不断线）；React 卸载 cleanup，无残留监听
+      useEffect(() => {
+        const mv = (e) => { if (!st.drawing) return; const p = toImg(e); st.drawing.x2 = p.x; st.drawing.y2 = p.y; redraw(st.drawing) }
+        const up = () => {
+          if (!st.drawing) return
+          const d = st.drawing; st.drawing = null
+          const tiny = Math.abs(d.x2 - d.x) < 3 && Math.abs(d.y2 - d.y) < 3 && d.t !== 'mos'
+          if (!tiny) { st.ops.push(d); st.redo = [] }
+          redraw()
+        }
+        window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up)
+        return () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+      }, [])
+
+      const start = (e) => {
+        e.preventDefault()
+        if (tool === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
+        const p = toImg(e)
+        st.drawing = { t: tool, c: color, w: 3, x: p.x, y: p.y, x2: p.x, y2: p.y }
+      }
+      const undo = () => { const op = st.ops.pop(); if (op) st.redo.push(op); redraw() }
+      const redoOp = () => { const op = st.redo.pop(); if (op) st.ops.push(op); redraw() }
+      const commitText = () => {
+        const v = txtValRef.current
+        txtValRef.current = ''
+        setTxtVal('')
+        if (txt && v.trim()) { st.ops.push({ t: 'text', c: color, w: 3, x: txt.px, y: txt.py, s: v }); st.redo = [] }
+        setTxt(null)
+        redraw()
+      }
+      const finish = () => {
+        try {
+          const cv = cvRef.current
+          cv.toBlob((blob) => {
+            const fr = new FileReader()
+            fr.onload = () => onDone(String(fr.result).split(',')[1] || '')
+            fr.onerror = () => onClose()
+            fr.readAsDataURL(blob)
+          }, 'image/png')
+        } catch { onClose() }
+      }
+      const toolBtn = (id, label, title) => h('button', {
+        key: id, type: 'button', title, onClick: () => setTool(id),
+        style: { width: '36px', height: '36px', margin: '0 2px', borderRadius: '8px', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '30px', textAlign: 'center', padding: 0, border: tool === id ? '2px solid #4f7cff' : '2px solid transparent' },
+      }, label)
+      const colorBtn = (id, c, title) => h('button', {
+        key: id, type: 'button', title, onClick: () => setColor(c),
+        style: { width: '30px', height: '30px', margin: '3px 2px', borderRadius: '50%', background: c, cursor: 'pointer', padding: 0, border: color === c ? '2px solid #fff' : '2px solid transparent' },
+      })
+      const barBtn = (label, title, bg, onClick) => h('button', {
+        key: label, type: 'button', title, onClick,
+        style: { width: '36px', height: '36px', margin: '0 2px', border: 'none', borderRadius: '8px', background: bg, color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '36px', textAlign: 'center', padding: 0 },
+      }, label)
+      return h('div', {
+        style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+        onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③：点空白关闭
+      },
+        h('div', { style: { position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '4px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
+          toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
+          colorBtn('c-red', '#ff3b30', '红色'), colorBtn('c-blue', '#3b82f6', '蓝色'), colorBtn('c-yel', '#f5c518', '黄色'),
+          barBtn('↶', '撤销 (Ctrl+Z)', 'rgba(255,255,255,.12)', undo),
+          barBtn('↷', '重做 (Ctrl+Y)', 'rgba(255,255,255,.12)', redoOp),
+          h('span', { style: { width: '8px' } }),
+          barBtn('✗', '重截（重新抓屏）', '#d29922', onResnap),
+          barBtn('✓', '完成，贴进聊天框', '#2ea44f', finish),
+        ),
+        h('button', { type: 'button', title: '关闭编辑器（不贴图）', onClick: onClose, style: { position: 'absolute', top: '12px', right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer' } }, '✕'),
+        h('canvas', { ref: cvRef, onMouseDown: start, style: { maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000', display: ready ? 'block' : 'none' } }),
+        !ready ? h('div', { style: { color: '#99a', fontSize: '13px' } }, '截图加载中…') : null,
+        txt ? h('input', {
+          autoFocus: true, value: txtVal,
+          onChange: (e) => { txtValRef.current = e.target.value; setTxtVal(e.target.value) },
+          onKeyDown: (e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') commitText()
+            else if (e.key === 'Escape') { e.stopPropagation(); txtValRef.current = ''; setTxtVal(''); setTxt(null) }
+          },
+          onBlur: commitText,
+          style: { position: 'fixed', left: txt.cx + 'px', top: txt.cy + 'px', zIndex: 4, fontSize: '18px', padding: '4px 8px', borderRadius: '6px', border: '2px solid #4f7cff', background: 'rgba(255,255,255,.95)', color: '#111' },
+        }) : null,
+        h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } }, '标注后 ✓ 贴进聊天框 · ✗ 重截 · Esc 或点空白关闭'),
+      )
+    }
+
     function Capsule() {
       // undefined=还没探到后端（渲染 null）；null=探过但后端不在（也渲染 null）
       const [mode, setMode] = useState(undefined)
       const [busy, setBusy] = useState(false)
       const [err, setErr] = useState(null)
       const [hint, setHint] = useState(null) // 截图键轻提示（非错误）
+      const [shot, setShot] = useState(null) // 截图编辑层：null=关 / {png}=开（React 条件渲染）
       // R23 自定义弹窗：text=正文，resolve 由按钮回调完成（Promise 挂在 ref 上）
       const [confirmText, setConfirmText] = useState(null)
       const confirmResolve = useRef(null)
@@ -165,138 +328,7 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
-      // ── 页面内截图编辑层（微信式标注：框选/箭头/文字/马赛克/撤销重做/✓/✗重截）──
-      // 原 0.6.0 BrowserWindow 版因插件进程拿不到 electron API（/diag 实锤）架构性不可用，
-      // 整体移植为 client 页面内全屏覆盖层 —— 本文件就跑在聊天页里，天然同进程。
-      const openShotEditor = (b64, { onDone, onResnap }) => {
-        const wrap = document.createElement('div')
-        wrap.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#111;overflow:hidden;user-select:none'
-        const css = document.createElement('style')
-        css.textContent = '.vs-btn{width:36px;height:36px;margin:0 2px;border:none;border-radius:8px;background:rgba(255,255,255,.12);color:#fff;font-size:17px;cursor:pointer;line-height:36px;text-align:center;font-family:inherit}.vs-btn:hover{background:rgba(255,255,255,.24)}.vs-btn.on{background:var(--dsh-primary-color,#4f7cff)}.vs-btn.done{background:#2ea44f}.vs-btn.resnap{background:#d29922}'
-        wrap.appendChild(css)
-        const bar = document.createElement('div')
-        bar.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:2;display:flex;background:rgba(20,20,20,.92);border-radius:12px;padding:4px;box-shadow:0 4px 16px rgba(0,0,0,.5)'
-        const mk = (id, label, title, cls) => { const b = document.createElement('button'); b.id = id; b.className = 'vs-btn' + (cls ? ' ' + cls : ''); b.textContent = label; b.title = title; bar.appendChild(b); return b }
-        mk('t-rect', '□', '矩形框选'); mk('t-arr', '↗', '箭头'); mk('t-text', 'T', '文字'); mk('t-mos', '▒', '马赛克')
-        mk('c-red', '●', '红色', 'on').style.color = '#ff3b30'
-        mk('c-blue', '●', '蓝色').style.color = '#3b82f6'
-        mk('c-yel', '●', '黄色').style.color = '#f5c518'
-        const uBtn = mk('undo', '↶', '撤销 (Ctrl+Z)'); const rBtn = mk('redo', '↷', '重做 (Ctrl+Y)')
-        bar.appendChild(document.createElement('span')).style.cssText = 'width:10px'
-        mk('resnap', '✗', '重截（重新抓屏）', 'resnap')
-        const okB = mk('done', '✓', '完成，贴进聊天框', 'done')
-        wrap.appendChild(bar)
-        const cv = document.createElement('canvas')
-        cv.style.cssText = 'position:absolute;inset:0;width:100vw;height:100vh;cursor:crosshair'
-        wrap.appendChild(cv)
-        const ctx = cv.getContext('2d')
-        const txt = document.createElement('input')
-        txt.style.cssText = 'position:absolute;display:none;z-index:3;font-size:18px;padding:4px 8px;border:2px solid var(--dsh-primary-color,#4f7cff);border-radius:6px;background:rgba(255,255,255,.95);color:#111'
-        wrap.appendChild(txt)
-        document.body.appendChild(wrap)
-
-        let base = null, ops = [], redo = []
-        let tool = 'rect', color = '#ff3b30', lw = 3, drawing = null
-        const scaleX = () => base ? (cv.width / window.innerWidth) : 1
-        const scaleY = () => base ? (cv.height / window.innerHeight) : 1
-
-        function drawOp(g, op) {
-          g.strokeStyle = op.c; g.fillStyle = op.c; g.lineWidth = op.w; g.lineCap = 'round'; g.lineJoin = 'round'
-          if (op.t === 'rect') { const x = Math.min(op.x, op.x2), y = Math.min(op.y, op.y2); g.strokeRect(x, y, Math.abs(op.x2 - op.x), Math.abs(op.y2 - op.y)) }
-          else if (op.t === 'arr') {
-            const a = Math.atan2(op.y2 - op.y, op.x2 - op.x), h = Math.max(10, op.w * 4)
-            g.beginPath(); g.moveTo(op.x, op.y); g.lineTo(op.x2, op.y2)
-            g.lineTo(op.x2 - h * Math.cos(a - 0.45), op.y2 - h * Math.sin(a - 0.45))
-            g.moveTo(op.x2, op.y2); g.lineTo(op.x2 - h * Math.cos(a + 0.45), op.y2 - h * Math.sin(a + 0.45))
-            g.stroke()
-          } else if (op.t === 'text') { g.font = (op.w * 6 + 12) + 'px system-ui,sans-serif'; g.fillText(op.s, op.x, op.y) }
-          else if (op.t === 'mos') {
-            const x0 = Math.max(0, Math.min(op.x, op.x2)), y0 = Math.max(0, Math.min(op.y, op.y2))
-            const w = Math.min(cv.width - x0, Math.abs(op.x2 - op.x)), h = Math.min(cv.height - y0, Math.abs(op.y2 - op.y))
-            if (w < 1 || h < 1) return
-            const t = document.createElement('canvas'); const s = 14
-            t.width = Math.ceil(w / s); t.height = Math.ceil(h / s)
-            const tg = t.getContext('2d')
-            tg.drawImage(base, x0, y0, w, h, 0, 0, t.width, t.height)   // 永远从原图取样
-            g.imageSmoothingEnabled = false
-            g.drawImage(t, x0, y0, w, h)
-            g.imageSmoothingEnabled = true
-          }
-        }
-        function render(extra) {
-          ctx.clearRect(0, 0, cv.width, cv.height)
-          if (base) ctx.drawImage(base, 0, 0)
-          for (const op of ops) drawOp(ctx, op)
-          if (extra) drawOp(ctx, extra)
-        }
-        const img = new Image()
-        img.onload = () => { cv.width = img.naturalWidth; cv.height = img.naturalHeight; base = img; render() }
-        img.src = 'data:image/png;base64,' + b64
-
-        const pos = (e) => ({ x: e.clientX * scaleX(), y: e.clientY * scaleY() })
-        cv.addEventListener('mousedown', (e) => {
-          e.preventDefault()
-          const p = pos(e)
-          if (tool === 'text') return placeText(e.clientX, e.clientY, p)
-          drawing = { t: tool, c: color, w: lw, x: p.x, y: p.y, x2: p.x, y2: p.y }
-        })
-        window.addEventListener('mousemove', mv)
-        function mv(e) { if (!drawing) return; const p = pos(e); drawing.x2 = p.x; drawing.y2 = p.y; render(drawing) }
-        window.addEventListener('mouseup', up)
-        function up() {
-          if (!drawing) return
-          const d = drawing; drawing = null
-          const tiny = Math.abs(d.x2 - d.x) < 3 && Math.abs(d.y2 - d.y) < 3 && d.t !== 'mos'
-          if (!tiny) { ops.push(d); redo = []; render() } else render()
-        }
-        function placeText(cx, cy, pImg) {
-          txt.style.display = 'block'; txt.style.left = cx + 'px'; txt.style.top = cy + 'px'
-          txt.dataset.px = pImg.x; txt.dataset.py = pImg.y; txt.value = ''
-          setTimeout(() => txt.focus(), 0)
-        }
-        txt.addEventListener('keydown', (e) => {
-          e.stopPropagation()
-          const box = e.target
-          if (e.key === 'Enter' && box.value.trim()) {
-            ops.push({ t: 'text', c: color, w: lw, x: +box.dataset.px, y: +box.dataset.py, s: box.value })
-            redo = []; box.style.display = 'none'; render()
-          } else if (e.key === 'Escape') { box.style.display = 'none' }
-        })
-        function key(e) {
-          if (e.key === 'Escape') { e.stopPropagation(); return destroy() }
-          if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo() }
-          else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redoOp() }
-        }
-        window.addEventListener('keydown', key, true)   // capture：编辑层优先吃键
-        function undo() { const op = ops.pop(); if (op) { redo.push(op); render() } }
-        function redoOp() { const op = redo.pop(); if (op) { ops.push(op); render() } }
-        const TOOLMAP = { 't-rect': 'rect', 't-arr': 'arr', 't-text': 'text', 't-mos': 'mos' }
-        bar.addEventListener('click', (e) => {
-          const id = e.target?.id; if (!id) return
-          if (TOOLMAP[id]) { tool = TOOLMAP[id]; for (const k of ['t-rect', 't-arr', 't-text', 't-mos']) document.getElementById(k).classList.toggle('on', k === id) }
-          else if (id === 'c-red' || id === 'c-blue' || id === 'c-yel') {
-            color = { 'c-red': '#ff3b30', 'c-blue': '#3b82f6', 'c-yel': '#f5c518' }[id]
-            for (const k of ['c-red', 'c-blue', 'c-yel']) document.getElementById(k).classList.toggle('on', k === id)
-          }
-          else if (id === 'undo') undo()
-          else if (id === 'redo') redoOp()
-          else if (id === 'resnap') { destroy(); onResnap && onResnap() }
-          else if (id === 'done') {
-            try {
-              cv.toBlob((blob) => {
-                const fr = new FileReader()
-                fr.onload = () => { destroy(); onDone && onDone(String(fr.result).split(',')[1] || '') }
-                fr.readAsDataURL(blob)
-              }, 'image/png')
-            } catch { destroy() }
-          }
-        })
-        function destroy() {
-          window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up)
-          window.removeEventListener('keydown', key, true)
-          wrap.remove()
-        }
-      }
+      // （旧 openShotEditor 命令式孤儿层已删——React 版 ShotEditor 在模块级）
 
       const pasteIntoEditor = (b64) => {
         // 微信式同进程直插：本函数就跑在聊天页进程里，构造 File 派发 paste 事件给
@@ -336,7 +368,7 @@ window.__ModuleLoader__.load({
       }
       const snap = async () => {
         // 截图键 v2（微信式）：服务端只管抓屏（隐藏-恢复宿主窗）→ png 回传 →
-        // 页面内编辑层标注 → ✓ 合成 paste 直进聊天框 / ✗ 重截 / Esc 取消。
+        // setShot 打开 React 编辑层（绝无孤儿层）→ ✓ 合成 paste 直进聊天框 / ✗ 重截 / Esc 关。
         if (busy) return
         setBusy(true); setErr(null); setHint(null)
         try {
@@ -345,10 +377,8 @@ window.__ModuleLoader__.load({
           })
           const j = await r.json()
           if (!r.ok) throw new Error(j?.error || 'HTTP ' + r.status)
-          openShotEditor(j.png, {
-            onDone: (b64) => { deliverPng(b64) },
-            onResnap: () => { snap() },
-          })
+          if (!j.png) throw new Error('服务端未返回图像数据')
+          setShot({ png: j.png })
         } catch (e) {
           setErr(e.message); setTimeout(() => setErr(null), 4000)
         } finally { setBusy(false) }
@@ -524,6 +554,12 @@ window.__ModuleLoader__.load({
             ),
           ),
         ) : null,
+        shot ? h(ShotEditor, {
+          png: shot.png,
+          onClose: () => setShot(null),
+          onDone: (b64) => { setShot(null); deliverPng(b64) },
+          onResnap: () => snap(),
+        }) : null,
       )
     }
 
