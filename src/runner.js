@@ -18,7 +18,7 @@
  *
  * ## B3 拉取模式（R20 接线）
  *
- * 档位表 MODES 里 silent/dynamic/auto 带 `pullMode:true`：采集回调只打分+帧进环形
+ * 档位表 MODES 里 low/high/max/custom 带 `pullMode:true`：采集回调只打分+帧进环形
  * 缓冲（buffer.js，48MB 上限），**组图延迟到 peek/watch 按需做**（pipeline.peekSheet）。
  * 悬浮窗/插话/语音机制已随 B3 丢弃清单移除 —— 视觉的交互面只有对话页胶囊。
  * ultra 档保留推送形态（scene 满幅单帧天然是 maxFrames:1 推送）。
@@ -89,7 +89,8 @@ export const DEFAULT_PACE = 'normal';
  *
  * 字段约定：
  * - enabled:false 表示采集进程应停止（关档语义）。
- * - wakeGapSec:null = 跟随 PACES[pace].wakeGapSec；Infinity = 不主动唤醒。
+ * - wakeGapSec:Infinity = 不主动唤醒（low/high/max/custom 拉取档全零投递，监护循环无投递路径）；
+ *   ultra 硬编码 4s 推送；off 的 null 为关档占位、无消费方。
  * - scene:true 时走 SCENE_OPTS（满幅单帧），唤醒间隔硬编码 4s（规格 §三 R1）。
  * - high/max 采集行为同为「过线帧全进池、零投递」，差别只在门槛：max 用 dense（cutAbs 7）最灵敏。
  */
@@ -130,7 +131,7 @@ export const MODES = Object.freeze({
     pace: 'dense',
     minFrames: 1,
     scene: false,
-    wakeGapSec: null,
+    wakeGapSec: Infinity,
     pullMode: true,
   }),
   ultra: Object.freeze({

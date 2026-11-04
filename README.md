@@ -4,15 +4,16 @@ DSH 视觉插件（`dsh-see-now` 0.0.7 的 fork，Apache-2.0，LICENSE/NOTICE �
 
 给会话一个 `vision` 工具：按画面变化量给帧打分，重要的帧拼成多格图；**拉取模式**下帧先进 48MB 内存环形缓冲，模型 `vision({action:"peek"})` 按需取图，不主动刷屏。
 
-## 五档
+## 六档
 
 | 档位 | 行为 | 帧去向 |
 |---|---|---|
-| 关 | 采集停止 | peek 报 102 |
-| 静默 | 常驻采集，不主动唤醒 | 拉取缓冲 |
-| 动态 | 常驻 + 画面变化时叫醒模型 | 拉取缓冲 |
-| 原画 | 满幅单帧即时投递（每次开启需确认，约 872 token/帧） | 推送 |
-| 自动 | 动态 + 静止 5 分钟降费档 / 15 分钟建议关闭 | 拉取缓冲 |
+| off | 采集停止 | peek 报 102 |
+| low | 常驻采集，大动作预筛（过线门槛 20），不唤醒 | 拉取缓冲 |
+| high | 常驻采集（门槛 12），零投递 | 拉取缓冲 |
+| max | 最灵敏（门槛 7），零打扰 | 拉取缓冲 |
+| ultra | 满幅单帧即时投递（每次开启需确认，约 872 token/帧；弹窗按切换频率给每分钟 token 预估） | 推送 |
+| 自定义 | 清晰度（4 档）× 节奏（省静/日常/灵敏）自由组合的拉取档 | 拉取缓冲 |
 
 通信面：`GET/POST /api/vision-toggle/{status,mode,snapshot,dialog}` + SSE `/events`（换档广播）。
 错误码表见 [ERRORS.md](ERRORS.md)。
@@ -36,6 +37,6 @@ node scripts/build.mjs          # esbuild 双入口 → dist/{server,client}.js
 node scripts/sim.mjs <video>    # 回放等价性（ kept 帧序列对比）
 ```
 
-模块地图：`index.js`（组装+通信面）→ `runner.js`（采集生命周期+模式）→ `loop.js`（常驻唤醒循环）→ `pipeline.js`（打分/拼图/编码）→ `buffer.js`（拉取缓冲）→ `capture.js`（ffmpeg 参数）→ `autoMode.js`+`sentinel.js`（自动挡/预筛，v1 默认关）→ `client.js`（对话页胶囊）。
+模块地图：`index.js`（组装+通信面）→ `runner.js`（采集生命周期+六档 MODES）→ `loop.js`（监护循环：只攒帧+心跳，**零投递**）→ `pipeline.js`（打分/拼图/编码）→ `buffer.js`（48MB 拉取缓冲）→ `capture.js`（ffmpeg 参数）→ `sentinel.js`（**v2 预留接口，当前未接线**：每 6 帧评 1 次的预筛接缝）→ `dialog.js`（成本确认弹窗文案）→ `client.js`（对话页胶囊）。
 
 数据目录：`~/.dsh/vision-toggle/config.json`（原子写 + .bak；只存 mode/pace/quality/updatedAt）。
