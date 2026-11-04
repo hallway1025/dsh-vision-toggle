@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 — 六档全拉取（ultra 拉取化）
+
+主人 m09062 定 ultra 定位为「参数拉满、不差钱用户的持续高精度观看」。推送形态与该定位矛盾
+（投递要排队等模型回合结束，画面过时——正是 0.2.0 改造要杀的病），故 ultra 也改拉取：
+
+- runner.js：ultra 档 quality=ultra + pace=dense（1600×900 采集 + cutAbs 7 最高灵敏度），
+  pullMode:true / scene:false / wakeGapSec:Infinity；六档零投递，唤醒路径整体废除。
+- index.js：applyMode 所有采集档统一起监护循环；/snapshot 非 pull 分支降级为兜底注释；
+  ultra 开档确认保留（401），hint 改拉取语义。
+- dialog.js：确认文案改「采集不消耗 token，peek 单帧 ≈872 tok，48MB 缓冲约存 11 帧」。
+- scene:true 保留为模型侧临时逐帧参数（args.scene → SCENE_OPTS），不再与档位绑定。
+- runner.js:435 非 pull 队列路径降级为兜底（文件回放 watch / 迁移前 config）。
+
+
 ## 0.3.0 — 2026-11-04（六档重定义）
 
 挡位全换：off / low / high / max / ultra / 自定义（主人 m08539/m08564/m08582 拍板）：

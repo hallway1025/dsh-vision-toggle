@@ -32,7 +32,7 @@ window.__ModuleLoader__.load({
       low: 'low：大动作才留帧进池，模型自主 peek（最省）',
       high: 'high：过线帧全进缓存池，模型自主 peek',
       max: 'max：最灵敏持续感知（门槛 7），全进池零打扰',
-      ultra: 'ultra：满幅逐帧拉满（开启有警告）',
+      ultra: 'ultra：满幅拉满·最高灵敏度（开启有警告）',
       custom: '自定义：清晰度 × 节奏自由组合',
     }
     const API = '/api/vision-toggle'

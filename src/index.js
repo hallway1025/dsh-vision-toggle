@@ -223,7 +223,7 @@ async function registerAll(ctx) {
     if (!m) return { ok: false, code: 101, error: `未知档位：${modeId}` };
     if (modeId === 'ultra' && currentMode !== 'ultra' && confirmed !== true) {
       // 401=需要确认 / 402=用户拒绝（规格 §七 错误码表，ERRORS.md 同源）
-      return { ok: false, code: 401, error: 'confirm-needed', hint: '原画档每次开启需确认（满幅单帧，约 872 token/张）' };
+      return { ok: false, code: 401, error: 'confirm-needed', hint: 'ultra 参数拉满（1600×900 采集 + 最高灵敏度），peek 单帧约 872 token' };
     }
     currentMode = modeId;
     sceneMode = Boolean(m.scene);
@@ -244,8 +244,8 @@ async function registerAll(ctx) {
     // 清晰度覆盖（0.3.0）：low/high/max/custom 四档接受；off 无采集，ultra 固定满幅不降
     const effQ = ['low', 'standard', 'high'].includes(quality) && modeId !== 'off' && modeId !== 'ultra' ? quality : m.quality;
     const st = await runner.start({ src: { kind: 'screen' }, quality: effQ, opts });
-    // 主动看改造：拉取档统一起**监护循环**（只攒帧+心跳，零投递）；ultra 推送档不用。
-    if (m.pullMode) ensureLoop();
+    // 主动看改造（0.4.0 六档全拉取）：所有采集档统一起**监护循环**（只攒帧+心跳，零投递）。
+    ensureLoop();
     log(`档位 → ${m.label}（quality=${effQ} pace=${paceMode}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}${effQ !== m.quality ? ' 自定义' : ''}）`);
     broadcastMode();
     saveConfig({ mode: modeId, pace: paceMode, quality: effQ }, { log });
@@ -608,7 +608,7 @@ async function registerAll(ctx) {
       }
       if (req.method === 'POST' && p === '/snapshot') {
         // 0.3.0 全档可截图：pull 档走 peekSheet（**不消费帧**，不抢模型的图）；
-        // 推送档（ultra）与关档走 flush 队列 / 临时拉起（旧路径）。
+        // 非拉取状态（关档 / 迁移前 config / 文件回放）走 flush 队列兜底（旧路径）。
         const stSnap = runner.status();
         if (stSnap.pull && stSnap.running) {
           let sheetB = null;

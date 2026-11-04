@@ -21,7 +21,7 @@
  * 档位表 MODES 里 low/high/max/custom 带 `pullMode:true`：采集回调只打分+帧进环形
  * 缓冲（buffer.js，48MB 上限），**组图延迟到 peek/watch 按需做**（pipeline.peekSheet）。
  * 悬浮窗/插话/语音机制已随 B3 丢弃清单移除 —— 视觉的交互面只有对话页胶囊。
- * ultra 档保留推送形态（scene 满幅单帧天然是 maxFrames:1 推送）。
+ * 0.4.0 六档全拉取：ultra 同样进环形缓冲（满幅采集+最高灵敏度），唤醒路径整体废除。
  */
 
 import { spawnFrames, pickScreenEngine, screenEngineWarning } from './capture.js';
@@ -76,7 +76,7 @@ export const DEFAULT_PACE = 'normal';
  * 六档模式表（0.3.0 重定义 · 主人拍板 off/low/high/max/ultra + 自定义）。
  *
  * 每档是一组参数组合；createRunner 消费本表：`pullMode:true` 的档位（low/high/max/custom）
- * 走 B3 拉取模式（采集→环形缓冲，出图按需组）；ultra 保留推送（scene 满幅单帧）。
+ * 走 B3 拉取模式（采集→环形缓冲，出图按需组）；0.4.0 起 ultra 也是拉取（满幅+dense），六档零投递。
  *
  * | 档 | 语义 | 成本形态 |
  * |---|---|---|
@@ -84,14 +84,14 @@ export const DEFAULT_PACE = 'normal';
  * | low     | 大动作才留帧（cutAbs 20 预筛），不叫模型，peek 按需出图 | floor 帧底价 |
  * | high    | 过线帧全进池（cutAbs 12），不叫模型，peek 按需出图 | 按屏幕活动 |
  * | max     | 同 high 采集，dense 灵敏门槛（cutAbs 7）——持续感知全进池，不叫模型 | 最密帧流 |
- * | ultra   | 满幅单帧 + 每次开启弹窗警告确认 | 872tok/张按需 |
+ * | ultra   | 参数拉满：1600×900 采集 + dense 灵敏门槛（cutAbs 7），peek 按需出图 | 872tok/帧按需 |
  * | custom  | 用户自由组合参数（config 的 quality × pace，applyMode 传入） | 按所选参数 |
  *
  * 字段约定：
  * - enabled:false 表示采集进程应停止（关档语义）。
- * - wakeGapSec:Infinity = 不主动唤醒（low/high/max/custom 拉取档全零投递，监护循环无投递路径）；
- *   ultra 硬编码 4s 推送；off 的 null 为关档占位、无消费方。
- * - scene:true 时走 SCENE_OPTS（满幅单帧），唤醒间隔硬编码 4s（规格 §三 R1）。
+ * - wakeGapSec:Infinity = 不主动唤醒（0.4.0 六档全拉取，监护循环无投递路径）；
+ *   off 的 null 为关档占位、无消费方。
+ * - scene:true 保留为模型侧临时逐帧参数（args.scene → SCENE_OPTS），不再与任何档位绑定。
  * - high/max 采集行为同为「过线帧全进池、零投递」，差别只在门槛：max 用 dense（cutAbs 7）最灵敏。
  */
 export const MODES = Object.freeze({
@@ -138,10 +138,11 @@ export const MODES = Object.freeze({
     label: 'ultra',
     enabled: true,
     quality: 'ultra',
-    pace: 'normal',
+    pace: 'dense',
     minFrames: 1,
-    scene: true,
-    wakeGapSec: 4,
+    scene: false,
+    wakeGapSec: Infinity,
+    pullMode: true,
   }),
   custom: Object.freeze({
     label: '自定义',
@@ -432,7 +433,7 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
           };
         }
 
-        // ── 推送模式（ultra / 显式来源）：队列语义，保留 eager 首帧 ──
+        // ── 非拉取兜底（文件回放 watch / 迁移前 config）：队列语义，保留 eager 首帧 ──
         while (Date.now() < deadline) {
           if (signal?.aborted) {
             return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };

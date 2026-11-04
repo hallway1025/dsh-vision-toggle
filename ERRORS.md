@@ -1,4 +1,4 @@
-# ERRORS.md — 错误码与文案（v0.3.0）
+# ERRORS.md — 错误码与文案（v0.4.0）
 
 错误码统一走 `{ ok:false, code, error, hint? }` 形状（工具结果与 API 响应同源）。
 
