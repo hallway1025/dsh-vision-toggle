@@ -8,7 +8,7 @@
 
 import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, MODES, DEFAULT_MODE } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
-import { screenshotFlow, getElectron } from './screenshot.js';
+import { screenshotFlow } from './screenshot.js';
 import { visionToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
 import { startLoop } from './loop.js';
 import { loadConfig, saveConfig } from './config.js';
@@ -620,34 +620,17 @@ async function registerAll(ctx) {
           node: process.versions.node, electronVer: process.versions.electron ?? null, probe });
       }
       if (req.method === 'POST' && p === '/screenshot') {
-        // 截图键 v2（0.5.0 基座）：gdigrab 全屏原生分辨率，隐藏-恢复宿主窗，
-        // A 路 = Electron 剪贴板 + webContents.paste() 直进聊天框。
-        // A 路不可达时把 base64 PNG 交回前端走 B 路（写剪贴板 → Ctrl+V）。
+        // 截图键 v2（微信式同进程直插）：gdigrab 全屏原生分辨率 → 隐藏-恢复宿主窗 →
+        // （可选）编辑器 → 把 base64 PNG 交回 client，由页面内合成 paste 事件喂 Lexical
+        // （client 就在聊天页进程里 —— 与微信「截图组件与聊天框同进程直插」同构）。
+        // 服务端不做任何剪贴板/模拟按键投递（实测 OLE 丢失 + 焦点不可控，双坑）。
         const body = await readBody(req);
         let args = {};
         try { args = body ? JSON.parse(body) : {}; } catch { return json(res, 400, { error: 'body 不是合法 JSON' }); }
         // edit（默认 true）：微信式编辑器（框选/箭头/文字/马赛克/撤销/重做/✓/✗重截）
-        // edit=false：抓完直接贴。electron 不可达时自动降级 B 路（前端写剪贴板）。
-        const wantEdit = args.edit !== false;
-        const electron = wantEdit ? await getElectron() : null;
-        if (wantEdit && !electron) {
-          // 编辑器起不来（A 路前提不成立）：退 0.5.0 直贴流程（hide+paste / B 路兜底）
-          const r0 = await screenshotFlow({ ffmpegPath: ffmpeg.path, hide: args.hide !== false, edit: false });
-          if (!r0.png) return json(res, 504, { error: '抓屏失败（gdigrab 无输出）' });
-          if (r0.delivered === 'unavailable') {
-            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-            return res.end(JSON.stringify({ ok: true, delivered: 'unavailable', png: r0.png.toString('base64') }));
-          }
-          return json(res, 200, { ok: true, delivered: r0.delivered, hidden: r0.hidden, editor: false });
-        }
-        const r = await screenshotFlow({ ffmpegPath: ffmpeg.path, hide: args.hide !== false, edit: wantEdit, electron });
-        if (r.cancelled) return json(res, 200, { ok: true, delivered: 'cancelled' });
+        const r = await screenshotFlow({ ffmpegPath: ffmpeg.path, hide: args.hide !== false });
         if (!r.png) return json(res, 504, { error: '抓屏失败（gdigrab 无输出）' });
-        if (r.delivered === 'unavailable') {
-          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-          return res.end(JSON.stringify({ ok: true, delivered: 'unavailable', png: r.png.toString('base64') }));
-        }
-        return json(res, 200, { ok: true, delivered: r.delivered, hidden: r.hidden, editor: true });
+        return json(res, 200, { ok: true, delivered: 'client-paste', png: r.png.toString('base64'), hidden: r.hidden });
       }
       if (req.method === 'POST' && p === '/snapshot') {
         // 0.3.0 全档可截图：pull 档走 peekSheet（**不消费帧**，不抢模型的图）；

@@ -1,13 +1,12 @@
 /**
- * screenshot.js — 截图键 v2：gdigrab 全屏原生分辨率 + 隐藏-恢复宿主窗口 + A 路进聊天框。
+ * screenshot.js — 截图键 v2（服务端只管抓屏）：gdigrab 全屏原生分辨率 + 隐藏-恢复宿主窗口。
  *
  * 与缓冲池完全正交：不走 vision 管线（那里面是缩放过的历史帧），
  * 每次都是 ffmpeg gdigrab 现场抓当前桌面物理像素。
  *
- * Electron 写入（A 路）在宿主 main 进程内完成：
- *   clipboard.writeImage(nativeImage) → webContents.paste()
- * Lexical 输入框的 PASTE_COMMAND 原生接住 clipboardData 里的图片 → 附件入库。
- * electron 不可达时返回 { delivered: 'unavailable' }，调用方降级（写剪贴板由前端兜底）。
+ * 投递（微信式同进程直插）不在这里做：png 返回给端点 → client 在聊天页进程内
+ * 合成 paste 事件喂 Lexical（服务端剪贴板/模拟按键两路实测均不可靠，已弃）。
+ * 标注编辑器同样在 client 页面内（BrowserWindow 版因插件进程拿不到 electron API 而废）。
  */
 
 import { spawn } from 'node:child_process';
@@ -60,7 +59,7 @@ export async function grabFullScreen(ffmpegPath) {
   const os = await import('node:os');
   const path = await import('node:path');
   const fsp = await import('node:fs/promises');
-  const out = path.join(os.tmpdir(), `dsh-shot-\${Date.now()}\${process.pid}.png`);
+  const out = path.join(os.tmpdir(), 'dsh-shot-' + Date.now() + '-' + process.pid + '.png');
   try {
     await spawnFile(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
@@ -77,93 +76,7 @@ export async function grabFullScreen(ffmpegPath) {
   }
 }
 
-// ── Electron 可达性（A 路前提）：先试内建 import，再退 createRequire ──
-export async function getElectron() {
-  let electron = null;
-  try { electron = await import('electron'); } catch { /* 下一路 */ }
-  if (!electron) {
-    try {
-      const { createRequire } = await import('node:module');
-      electron = createRequire(import.meta.url)('electron');
-    } catch { return null; }
-  }
-  const mod = electron?.default ?? electron;
-  return (mod && mod.clipboard && mod.nativeImage) ? mod : null;
-}
-
-// ── D 路：PowerShell 写剪贴板（不依赖 electron API；keys=true 时恢复焦点后 SendKeys ^v）──
-const CLIP_PS = [
-  'param([string]$Path, [switch]$Keys)',
-  'Add-Type -AssemblyName PresentationFramework',
-  '$bytes = [System.IO.File]::ReadAllBytes($Path)',
-  '$ms = New-Object System.IO.MemoryStream(,$bytes)',
-  '$dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create($ms, [System.Windows.Media.Imaging.BitmapCreateOptions]::None, [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)',
-  '[System.Windows.Clipboard]::SetImage($dec.Frames[0])',
-  'if ($Keys) { Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 350; [System.Windows.Forms.SendKeys]::SendWait("^v") }',
-  'Write-Output "clip-ok"',
-].join("\n");
-
-export async function deliverViaPowerShell(pngBuf, { keys = false } = {}) {
-  const [{ join }, { tmpdir }, fsp] = await Promise.all([
-    import("node:path"), import("node:os"), import("node:fs/promises"),
-  ]);
-  const stamp = Date.now();
-  const pngPath = join(tmpdir(), `shot-${stamp}.png`);
-  const psPath = join(tmpdir(), `shot-clip-${stamp}.ps1`);
-  await fsp.writeFile(pngPath, pngBuf);
-  await fsp.writeFile(psPath, CLIP_PS, "utf8");
-  try {
-    const args = ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", psPath, "-Path", pngPath];
-    if (keys) args.push("-Keys");
-    const out = await spawnFile("powershell.exe", args, 15000);
-    const ok = /clip-ok/.test(out.stdout ?? "");
-    if (!ok) { log("D 路剪贴板写入失败:", (out.stderr ?? "").slice(0, 200)); return { delivered: "unavailable" }; }
-    return { delivered: keys ? "paste-keys" : "clipboard" };
-  } catch (e) {
-    log("D 路异常:", e?.message ?? e);
-    return { delivered: "unavailable" };
-  } finally {
-    try { await fsp.unlink(psPath); } catch { }
-    try { await fsp.unlink(pngPath); } catch { }
-  }
-}
-
-// ── Electron A 路：写剪贴板 + 对聊天窗口模拟粘贴 ──
-async function deliverViaElectron(pngBuf, electron) {
-  const mod = electron ?? (await getElectron());
-  if (!mod) return { delivered: 'unavailable' };
-  const { clipboard, nativeImage } = mod;
-  const img = nativeImage.createFromBuffer(pngBuf);
-  if (img.isEmpty()) return { delivered: 'unavailable' };
-  clipboard.writeImage(img);
-  try {
-    const { BrowserWindow } = mod;
-    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) ?? null;
-    if (!win) return { delivered: 'clipboard-only' };
-    const wc = win.webContents;
-    wc.focus();
-    // paste 前再补一次 focus（输入框由页面自身的焦点状态决定）
-    wc.paste();
-    return { delivered: 'pasted' };
-  } catch (e) {
-    log('paste 失败（图已在剪贴板）:', e?.message ?? e);
-    return { delivered: 'clipboard-only' };
-  }
-}
-
-/**
- * 一条龙：隐藏宿主窗 → gdigrab 抓屏 → Electron 写剪贴板+粘贴 → 恢复宿主窗。
- * hide=false 时跳过隐藏/恢复（抓到画面里会有 DSH 自己）。
- */
-export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, electron = null, keys = true }) {
-  // 编辑流程（0.6.0）：编辑器自己管 隐藏-抓屏-恢复 + ✗ 重截，这里只管结果投递
-  if (edit) {
-    const { editShotFlow } = await import('./editor.js');
-    const r = await editShotFlow({ ffmpegPath, electron });
-    if (r.cancelled || !r.png) return { png: null, cancelled: true, hidden: 'skipped' };
-    const d = await deliverViaElectron(r.png, electron);
-    return { png: r.png, delivered: d.delivered, hidden: 'ok' };
-  }
+export async function screenshotFlow({ ffmpegPath, hide = true }) {
   const pid = process.pid; // 插件 server 跑在宿主 main 进程内
   let hidden = 'skipped';
   if (hide) {
@@ -179,10 +92,5 @@ export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, el
       await setHostWindow(pid, 9); // 无条件恢复
     }
   }
-  let d = await deliverViaElectron(png, electron);
-  if (d.delivered === 'unavailable') {
-    // A 路不可达（插件进程拿不到 electron API）：D 路 = PowerShell 剪贴板写图（可选 SendKeys ^v）
-    d = await deliverViaPowerShell(png, { keys: keys !== false });
-  }
-  return { png, delivered: d.delivered, hidden };
+  return { png, hidden };
 }
