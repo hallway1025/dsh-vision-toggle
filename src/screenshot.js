@@ -35,8 +35,17 @@ const SHOWWIN_PS = `
   Add-Type -Namespace Native -Name W -MemberDefinition '
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);' | Out-Null
   \$p = Get-Process -Id \$ProcId -ErrorAction Stop
-  if (\$p.MainWindowHandle -ne [IntPtr]::Zero) {
-    [void][Native.W]::ShowWindow(\$p.MainWindowHandle, \$Cmd)
+  \$h = \$p.MainWindowHandle
+  # 本进程无窗口时沿父进程链向上找（插件 server=宿主 fork 的无窗口子进程，L-245）
+  \$cur = \$p
+  for (\$i = 0; \$i -lt 4 -and \$h -eq [IntPtr]::Zero; \$i++) {
+    \$par = (Get-CimInstance Win32_Process -Filter "ProcessId=\$(\$cur.Id)" -ErrorAction Stop).ParentProcessId
+    if (-not \$par) { break }
+    \$cur = Get-Process -Id \$par -ErrorAction Stop
+    \$h = \$cur.MainWindowHandle
+  }
+  if (\$h -ne [IntPtr]::Zero) {
+    [void][Native.W]::ShowWindow(\$h, \$Cmd)
     'OK'
   } else { 'NOWINDOW' }
 `;
@@ -98,7 +107,7 @@ export async function grabFullScreen(ffmpegPath) {
 }
 
 export async function screenshotFlow({ ffmpegPath, hide = true }) {
-  const pid = process.pid; // 插件 server 跑在宿主 main 进程内
+  const pid = process.ppid; // 插件 server=宿主 fork 的子进程（L-245）；宿主 main=父进程；PS 端再兜底爬祖先
   let hidden = 'skipped';
   if (hide) {
     hidden = await setHostWindow(pid, 6);

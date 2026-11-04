@@ -107,7 +107,7 @@ window.__ModuleLoader__.load({
       '.vts-txt.vts-on{background:#4f7cff;color:#fff}',
     ].join('')
 
-    function ShotEditor({ png, onClose, onDone, onResnap }) {
+    function ShotEditor({ png, onClose, onDone }) {
       const cvRef = useRef(null)
       const stRef = useRef({ ops: [], redo: [], base: null, cache: null, drawing: null })
       const [phase, setPhase] = useState('crop')   // crop=框选区 → edit=标注
@@ -422,6 +422,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'vts-bar' },
                 h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px', padding: '0 6px', whiteSpace: 'nowrap' } }, '拖动框选 · 松手进入标注'),
                 h('button', { type: 'button', title: '全屏（不框选直接标注）', onClick: () => confirmCrop(true), className: 'vts-btn', style: { background: '#2ea44f', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '全屏'),
+                h('button', { type: 'button', title: '退出截图（Esc 同效）', onClick: onClose, className: 'vts-btn', style: { background: '#d29922', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '✕ 退出'),
               ),
             )
           : h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
@@ -442,7 +443,7 @@ window.__ModuleLoader__.load({
                 h('span', { key: 'zl', style: { color: 'rgba(255,255,255,.6)', fontSize: '12px', minWidth: '44px', textAlign: 'center' } }, zoomLabel),
                 sep('s5'),
                 barBtn('↺', '重新框选（回到选区）', () => { zoomRef.current = null; setZoom(null); setPhase('crop'); setSel(null) }),
-                barBtn('✗', '重截（重新抓屏）', onResnap, '#d29922'),
+                barBtn('✗', '退出截图（不贴图）', onClose, '#d29922'),
                 barBtn('✓', '完成，贴进聊天框', finish, '#2ea44f'),
               ),
             ),
@@ -482,13 +483,16 @@ window.__ModuleLoader__.load({
       const [qStatus, setQStatus] = useState(null) // 当前生效清晰度（/status 回显）
       const [pStatus, setPStatus] = useState(null) // 当前生效节奏（/status 回显）
       const boxRef = useRef(null)
+      const [snapOpen, setSnapOpen] = useState(false) // 截图键小箭头的微菜单
       useEffect(() => { if (!open) setView('main') }, [open]) // 面板收起复位视图
       useEffect(() => {
-        if (!open) return
-        const away = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
+        if (!open && !snapOpen) return
+        const away = (e) => {
+          if (boxRef.current && !boxRef.current.contains(e.target)) { setOpen(false); setSnapOpen(false) }
+        }
         document.addEventListener('mousedown', away)
         return () => document.removeEventListener('mousedown', away)
-      }, [open])
+      }, [open, snapOpen])
 
       const askConfirm = (text) => new Promise((resolve) => {
         confirmResolve.current = resolve
@@ -588,14 +592,15 @@ window.__ModuleLoader__.load({
         }
         setHint('截图完成，但未收到图像数据'); setTimeout(() => setHint(null), 4000)
       }
-      const snap = async () => {
-        // 截图键 v2（微信式）：服务端只管抓屏（隐藏-恢复宿主窗）→ png 回传 →
+      const snap = async (hideWin) => {
+        // 截图键 v2（微信式）：服务端只管抓屏（hideWin=true 时先最小化宿主窗再抓）→ png 回传 →
         // setShot 打开 React 编辑层（绝无孤儿层）→ ✓ 合成 paste 直进聊天框 / ✗ 重截 / Esc 关。
         if (busy) return
         setBusy(true); setErr(null); setHint(null)
         try {
           const r = await fetch(API + '/screenshot', {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ hide: hideWin === true }),
           })
           const j = await r.json()
           if (!r.ok) throw new Error(j?.error || 'HTTP ' + r.status)
@@ -699,10 +704,23 @@ window.__ModuleLoader__.load({
 
       return h('div', { ref: boxRef, style: anchorStyle },
         h('button', {
-          title: '截图：抓一帧另开预览（全挡可用，不打断采集）',
-          onClick: snap, disabled: busy,
+          title: '截图（带 DSH 窗口）',
+          onClick: () => snap(false), disabled: busy,
           style: { ...btnStyle(false), display: 'inline-flex', alignItems: 'center', padding: '5px 8px' },
         }, snapIcon),
+        h('button', {
+          title: '截图选项',
+          onClick: () => { setSnapOpen(!snapOpen) }, disabled: busy,
+          style: { ...btnStyle(false), display: 'inline-flex', alignItems: 'center', padding: '5px 3px', marginLeft: '1px', fontSize: '9px', lineHeight: '1' },
+        }, '▾'),
+        snapOpen ? h('div', { style: { position: 'absolute', bottom: '100%', left: 0, marginBottom: '6px', minWidth: '150px', padding: '4px', borderRadius: '10px', border: '1px solid var(--dsh-border-color, rgba(127,127,127,0.25))', background: 'var(--dsh-bg-color, #1f1f24)', boxShadow: '0 4px 16px rgba(0,0,0,0.35)', zIndex: 40 } },
+          h('button', {
+            style: { display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', fontSize: '12px', borderRadius: '7px', border: 'none', background: 'transparent', color: 'var(--dsh-text-color, #eee)', cursor: 'pointer' },
+            onMouseEnter: (e) => { e.currentTarget.style.background = 'var(--dsh-hover-bg, rgba(255,255,255,0.08))' },
+            onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent' },
+            onClick: () => { setSnapOpen(false); snap(true) },
+          }, '隐藏窗口截图'),
+        ) : null,
         h('button', {
           title: '视觉挡位：' + (TITLES[mode] ?? ''),
           onClick: togglePanel, disabled: busy,
@@ -781,7 +799,6 @@ window.__ModuleLoader__.load({
           png: shot.png,
           onClose: () => setShot(null),
           onDone: (b64) => { setShot(null); deliverPng(b64) },
-          onResnap: () => snap(),
         }) : null,
       )
     }

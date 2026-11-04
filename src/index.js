@@ -627,8 +627,9 @@ async function registerAll(ctx) {
         const body = await readBody(req);
         let args = {};
         try { args = body ? JSON.parse(body) : {}; } catch { return json(res, 400, { error: 'body 不是合法 JSON' }); }
-        // edit（默认 true）：微信式编辑器（框选/箭头/文字/马赛克/撤销/重做/✓/✗重截）
-        const r = await screenshotFlow({ ffmpegPath: ffmpeg.path, hide: args.hide !== false });
+        // edit（默认 true）：微信式编辑器（框选/箭头/文字/马赛克/撤销/重做/✓/✕退出）
+        // hide（默认 false=带 DSH 窗口）：仅「隐藏窗口截图」选项传 true（m09943）
+        const r = await screenshotFlow({ ffmpegPath: ffmpeg.path, hide: args.hide === true });
         if (!r.png) return json(res, 504, { error: '抓屏失败（gdigrab 无输出）' });
         return json(res, 200, { ok: true, delivered: 'client-paste', png: r.png.toString('base64'), hidden: r.hidden });
       }
