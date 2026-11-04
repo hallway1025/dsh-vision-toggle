@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-11-04（主动看改造）
+
+核心语义从「被动推送唤醒」改为「主动拉取观看」（Active viewing, not push）：
+
+- **零投递**：loop 重写为纯采集监护（keep-alive + autoMode 心跳），不再向对话页投递唤醒——画面持续进缓冲，模型在自己回合里主动 peek。
+- **缓冲回看**：buffer 环形缓冲（上限 48MB）+ `countSince(ts)` 新帧计数；想看几分钟前的画面也行。
+- **API /status** 新字段 `pull / bufferedNew / buffered`：模型回合里查 bufferedNew 决定要不要看。
+- 五档全部拉取化（静默/动态/自动/关档监护行为统一），原画档保留推送。
+- 宿主破坏性适配：`vision({action:"status/peek"})` 语义更新（minor 版本口径，R16）。
+
+
 ## 0.1.0 — 2026-11-04
 
 从 `dsh-see-now` 0.0.7 fork（Apache-2.0，LICENSE/NOTICE 保留）。
