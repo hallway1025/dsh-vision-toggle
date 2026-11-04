@@ -715,8 +715,9 @@ window.__ModuleLoader__.load({
               MODES.map((m) => h('button', {
                 key: m.id,
                 title: TITLES[m.id],
-                // 延迟 420ms 收面板：滑块动画（.22s）播完再收（m08497「切换没用滑块效果」）
-                onClick: () => { pick(m.id); setTimeout(() => setOpen(false), 420) },
+                // 延迟 420ms 收面板：滑块动画（.22s）播完再收（m08497「切换没用滑块效果」）；
+                // custom 挡例外：面板保持开、pick 成功后切参数子面板（收起会被复位 effect 弹回主菜单）
+                onClick: () => { pick(m.id); if (m.id !== 'custom') setTimeout(() => setOpen(false), 420) },
                 disabled: busy,
                 style: itemStyle(ITEM_H),
               },
