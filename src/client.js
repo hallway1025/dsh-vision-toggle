@@ -118,6 +118,18 @@ window.__ModuleLoader__.load({
       const cvRef = useRef(null)
       const stRef = useRef({ ops: [], redo: [], base: null, cache: null, drawing: null })
       const [phase, setPhase] = useState('crop')   // crop=框选区 → edit=标注
+      // 全屏隐藏 DSH 原生窗口键（WCO titleBarOverlay 是 OS 层，网页盖不住；全屏时系统自动摘掉）
+      const [fsOK, setFsOK] = useState(false)
+      useEffect(() => {
+        let alive = true
+        const root = document.documentElement
+        try {
+          const p = root.requestFullscreen?.({ navigationUI: 'hide' })
+          if (p && p.then) p.then(() => { if (alive) setFsOK(true) }).catch(() => {})
+          else if (p) Promise.resolve(p).then(() => { if (alive) setFsOK(true) }).catch(() => {})
+        } catch {}
+        return () => { alive = false; if (document.fullscreenElement) document.exitFullscreen().catch(() => {}) }
+      }, [])
       const [tool, setTool] = useState('rect')
       const [color, setColor] = useState('#ff3b30')
       const [sel, setSel] = useState(null)         // 已定选区（图像坐标）
@@ -415,7 +427,7 @@ window.__ModuleLoader__.load({
         onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③
       },
         h('style', null, VTS_CSS),
-        h('button', { type: 'button', title: '关闭编辑器（不贴图）', onClick: onClose, style: { position: 'absolute', top: '12px', right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer', zIndex: 3 } }, '✕'),
+        h('button', { type: 'button', title: '退出截图（不贴图）', onClick: onClose, style: { position: 'absolute', top: (fsOK ? '12px' : '48px'), right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer', zIndex: 3 } }, '✕'),
         // 主体（上图下条，QQ 同款：工具条贴图下方）
         phase === 'crop'
           ? h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
@@ -428,7 +440,6 @@ window.__ModuleLoader__.load({
               ),
               h('div', { className: 'vts-bar' },
                 h('button', { type: 'button', title: '全屏（不框选直接标注）', onClick: () => confirmCrop(true), className: 'vts-btn', style: { background: '#2ea44f', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '全屏'),
-                h('button', { type: 'button', title: '退出截图（Esc 同效）', onClick: onClose, className: 'vts-btn', style: { background: '#d29922', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '✕ 退出'),
               ),
             )
           : h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
@@ -449,7 +460,6 @@ window.__ModuleLoader__.load({
                 h('span', { key: 'zl', style: { color: 'rgba(255,255,255,.6)', fontSize: '12px', minWidth: '44px', textAlign: 'center' } }, zoomLabel),
                 sep('s5'),
                 barBtn('↺', '重新框选（回到选区）', () => { zoomRef.current = null; setZoom(null); setPhase('crop'); setSel(null) }),
-                barBtn('✗', '退出截图（不贴图）', onClose, '#d29922'),
                 barBtn('✓', '完成，贴进聊天框', finish, '#2ea44f'),
               ),
             ),
