@@ -12,7 +12,7 @@
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 
 const log = (...a) => console.log('[shot-editor]', ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -235,13 +235,18 @@ export async function editShotFlow({ ffmpegPath, electron }) {
   const result = { png: null, cancelled: false };
   const onDone = (e, buf) => { result.png = Buffer.from(buf); cleanup(); };
   const onResnap = async () => {
-    // ✗：重新抓屏（窗口保持，画面刷新）；重新最小化 DSH 再抓
+    // ✗：重新抓屏。编辑器自己还全屏置顶 —— 不先 hide 就会抓到自己（死循环截图）。
     try {
-      await runPs(pid, 6); await sleep(450);
+      if (win && !win.isDestroyed()) win.hide();
+      await sleep(150);                       // 等合成器把编辑器从画面里摘掉
+      await runPs(pid, 6); await sleep(450);  // 最小化 DSH → 干净桌面
       const png = await grab(ffmpegPath);
-      await runPs(pid, 9);
-      if (win && !win.isDestroyed()) win.webContents.send('vision-shot-data', png);
-    } catch (err) { log('重截失败:', err?.message ?? err); }
+      await runPs(pid, 9);                    // 恢复 DSH
+      if (win && !win.isDestroyed()) { win.show(); win.focus(); win.webContents.send('vision-shot-data', png); }
+    } catch (err) {
+      log('重截失败:', err?.message ?? err);
+      if (win && !win.isDestroyed()) { try { win.show(); win.focus(); } catch { /* 已关 */ } }
+    }
   };
   const onCancel = () => { result.cancelled = true; cleanup(); };
   const cleanup = () => {
@@ -274,7 +279,6 @@ export async function editShotFlow({ ffmpegPath, electron }) {
 }
 
 // preload 不能用 data: URL —— 写临时文件再引用（Electron 要求 preload 是文件路径）
-import { writeFile } from 'node:fs/promises';
 let preloadPath = null;
 async function dataUrlPreload() {
   if (!preloadPath) {
