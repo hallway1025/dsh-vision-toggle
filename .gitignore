@@ -6,3 +6,4 @@ test-*.mp4
 !scripts/testdata/*.mp4
 # ffmpeg/PS 把 %VAR% 当字面目录名的运行产物
 %SystemDrive%/
+_archive/
