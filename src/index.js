@@ -6,16 +6,12 @@
  * 自己唤醒自己，停不下来（0.0.1 就是死在这儿）。
  */
 
-import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE } from './runner.js';
+import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, MODES, DEFAULT_MODE } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
 import { seeNowToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
-import { interjectNote, replyReminder, clearInterjected, noteInterjected, pendingInterjected } from './interject.js';
-import { appendSpoken, lastSaidNote } from './chat.js';
-import { ensureConfiguredVoice, detachAdapters, attachedAdapters, configuredVoiceAdapter, lastVoiceError } from './voice.js';
-import { speechSubscribers } from './speech.js';
 import { startLoop, HANGUP_NOTE } from './loop.js';
 
-export const name = 'dsh-see-now';
+export const name = 'dsh-vision-toggle';
 
 /**
  * `watch` 最多阻塞多久。
@@ -72,7 +68,7 @@ async function loadDefineTool() {
 }
 
 /** 一张图 → 模型看得懂的清单。数字都是「这张图里第几格」，不是抽象指标。 */
-function sheetText(sheet, { waited = 0, partial = false, userText = null, say = null, looping = false } = {}) {
+function sheetText(sheet, { waited = 0, partial = false, looping = false } = {}) {
   const { frames, from, to, why } = sheet;
   // 单帧时首尾相等，写成区间会变成"过去 24.1–24.1 秒"，读起来像出错了
   const span = frames.length === 1
@@ -98,16 +94,13 @@ function sheetText(sheet, { waited = 0, partial = false, userText = null, say = 
           : why === 'first' ? '刚打开，先给你此刻'
             : why === 'oneshot' ? '换了清晰度，先给你此刻'
               : '流结束';
-  const ask = userText
-    ? `\n${interjectNote(userText, { at: Date.now() })}`
-    : '';
   // 常驻模式要**明说**，否则模型会以为"还得我自己再调一次"，或者以为"看一眼就完事了"
   const loopNote = looping
     ? '\n**已经进入常驻模式**：下一张攒够我会再叫你，不用你现在就调下一次。'
-      + '你现在只要做一件事 —— 值得说就用 `say` 说一句，不值得说就别出声。'
+      + '你现在只要做一件事 —— 值得说就在对话里正常回复，不值得说就别出声。'
       + '用户关掉悬浮窗我就停。'
     : '';
-  return `${head}\n${lines.join('\n')}${ask}${lastSaidNote()}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）${replyReminder({ answered: Boolean(say) })}`;
+  return `${head}\n${lines.join('\n')}${loopNote}\n（${whyText}；想看下一段就再调一次 \`see_now({action:"watch"})\`。）`;
 }
 
 /**
@@ -126,14 +119,11 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
     mediaType: 'image/png',
     name: `see-now-${Date.now()}.png`,
   });
-  // `say` 是给清单用的，不进 meta —— 那是整段话，塞进 meta 只会让返回值翻倍
-  const { say: said, ...meta } = extra;
   return {
     images: [ref],
     text: sheetText(sheet, extra),
     meta: {
-      ...meta,
-      said: said ? String(said).slice(0, 200) : null,
+      ...extra,
       frames: sheet.frames.length,
       from: +sheet.from.toFixed(2),
       to: +sheet.to.toFixed(2),
@@ -141,20 +131,6 @@ async function attachAndReturn(ctx, sheet, extra = {}) {
       why: sheet.why,
       bytes: sheet.png.length,
     },
-  };
-}
-
-/** 当前声音状态（status 用）。**听不到声音时第一个要看的就是它。** */
-function voiceState() {
-  const configured = configuredVoiceAdapter();
-  let speakers = 0;
-  try { speakers = speechSubscribers(); } catch { /* 总线还没建起来 */ }
-  return {
-    configured: configured ?? null,
-    adapters: attachedAdapters(),
-    speakers,
-    // 配了但没挂上：把最后一次失败原因带出来，否则只能猜"是不是没重启"
-    reason: speakers > 0 ? null : (lastVoiceError() ?? null),
   };
 }
 
@@ -184,15 +160,6 @@ async function registerAll(ctx) {
   });
   disposers.push(() => runner.stop());
 
-  // 声音：和陪看共用同一份 `~/.dsh/voice.json`。**失败一律不抛** ——
-  // 声音是可选能力，装坏了最多没声音，不能让看屏幕起不来。
-  // 不 await 到阻塞启动：适配器要 import 模块、探测引擎，可能几百毫秒。
-  // 启动时挂一次只是热身；真正保证"改完配置就生效"的是每次调用前的 ensureConfiguredVoice。
-  ensureConfiguredVoice({ log })
-    .then((r) => { if (!r.ok && r.reason !== 'not-configured') log(`声音没挂上：${r.reason}`); })
-    .catch(() => { /* 已经在里面兜过了 */ });
-  disposers.push(() => { detachAdapters().catch(() => {}); });
-
   /**
    * 当前会话 id：从 `session/event` 钩子里拿（`session.header.id`）。
    *
@@ -218,6 +185,55 @@ async function registerAll(ctx) {
   let loopScene = null;
   /** 切模式时那一句说明：下一次工具结果里带给模型，然后清掉 */
   let pendingModeNote = '';
+
+  /**
+   * **五档状态（胶囊为主，规格 §四 / 决策 5）**：off / silent / dynamic / ultra / auto。
+   *
+   * 胶囊点击 → `applyMode`（这里说了算）；模型在会话里改 scene/pace/stop 参数 →
+   * `currentMode` 归 null（胶囊显示"自定义"）。档位只决定初始参数，之后模型仍可微调。
+   */
+  let currentMode = DEFAULT_MODE;
+  let modeSeq = 0;
+  const sseClients = new Set();
+  const broadcastMode = () => {
+    const line = 'data: ' + JSON.stringify({ type: 'mode', seq: ++modeSeq, mode: currentMode, at: Date.now() }) + '\n\n';
+    for (const res of sseClients) { try { res.write(line); } catch { /* 掉线由 close 清理 */ } }
+  };
+
+  /**
+   * 换档：stop（teardown，running=false）→ start（新参数立刻生效）→ 按档位决定起不起循环。
+   *
+   * runner.start 撞 `already:true` 只发生在宽限期内（running 仍 true）；而 `stop()`
+   * 就是 teardown，已把 running 置 false —— 所以 stop→start 直接吃到新参数，
+   * 不需要仿 watch 的 optsSig 重启路（那条路是给**阻塞 watch** 中途换参用的）。
+   * 原画每次开启需确认（规格 §四）；关 = 采集停止，缓冲随 teardown 排空。
+   */
+  const applyMode = async (modeId, { confirmed = false } = {}) => {
+    const m = MODES[modeId];
+    if (!m) return { ok: false, error: `未知档位：${modeId}` };
+    if (modeId === 'ultra' && currentMode !== 'ultra' && confirmed !== true) {
+      return { ok: false, error: 'confirm-needed', hint: '原画档每次开启需确认（满幅单帧，约 872 token/张）' };
+    }
+    currentMode = modeId;
+    sceneMode = Boolean(m.scene);
+    if (m.pace) paceMode = m.pace;
+    loopScene = null;
+    stopLoop('换档');
+    try { runner.stop(); } catch { /* 没在跑 */ }
+    if (!m.enabled) {
+      log(`档位 → ${m.label}（采集停止）`);
+      broadcastMode();
+      return { ok: true, mode: modeId, label: m.label };
+    }
+    const pace = m.pace ?? DEFAULT_PACE;
+    const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[pace].cutAbs };
+    const st = await runner.start({ src: { kind: 'screen' }, quality: m.quality, opts });
+    if (m.wakeGapSec !== Infinity) ensureLoop();
+    log(`档位 → ${m.label}（quality=${m.quality} pace=${pace}${m.scene ? ' scene' : ''}）`);
+    broadcastMode();
+    return { ok: true, mode: modeId, label: m.label, running: true, started: st };
+  };
+
   if (typeof ctx.on === 'function') {
     try {
       const off = ctx.on('session/event', (session) => {
@@ -340,24 +356,6 @@ async function registerAll(ctx) {
     async route(args = {}, run = {}) {
       const action = String(args.action ?? 'watch').toLowerCase();
 
-      // **每次调用都检查一遍声音**：改了 voice.json / tts.json，下一句就生效，不用重启宿主。
-      // 代价是一次 stat —— 挂载状态没变时 ensure 立刻返回，不会重复 import。
-      await ensureConfiguredVoice({ log }).catch(() => { /* 声音永远不该挡住看屏幕 */ });
-
-      // **`say` 的唯一入口**，在**任何采集动作之前**处理。
-      //
-      // 两件事必须同时发生，所以只能有一处：
-      //   ① 写盘 + 发声（`appendSpoken`）—— 窗口里有字、嘴里有声，缺一个就是 bug；
-      //   ② 撤掉"你还没回她"的待回执 —— 说了话就等于回了。
-      //
-      // 以前这两件事写在 `runner.watch()` 里，于是 `peek` 带 `say` 时既不发声也不清待回执
-      // （实测：peek 回了话，下一轮还在念"你还没回"）。放在这里所有 action 都覆盖到。
-      const said = args.say ? String(args.say).trim().slice(0, 800) : null;
-      if (said) {
-        try { appendSpoken('assistant', said); } catch { /* 写不进不影响看屏幕 */ }
-        clearInterjected();
-      }
-
       /**
        * 模式开关（粘性）。
        *
@@ -368,6 +366,7 @@ async function registerAll(ctx) {
       let modeNote = '';
       if (typeof args.scene === 'boolean' && args.scene !== sceneMode) {
         sceneMode = args.scene;
+        currentMode = null; // 模型手动改参 → 胶囊显示"自定义"
         try { runner.stop(); } catch { /* 没在跑 */ }
         stopLoop('换模式');
         loopScene = null;
@@ -388,6 +387,7 @@ async function registerAll(ctx) {
       const wantPace = args.pace ? String(args.pace).toLowerCase() : null;
       if (wantPace && PACES[wantPace] && wantPace !== paceMode) {
         paceMode = wantPace;
+        currentMode = null; // 同上：模型手动改参 → "自定义"
         try { runner.stop(); } catch { /* 没在跑 */ }
         stopLoop('换节奏');
         loopScene = null;
@@ -487,7 +487,6 @@ async function registerAll(ctx) {
         return await attachAndReturn(ctx, r.sheet, {
           waited: r.waited, partial: r.partial, quality: r.quality,
           userText: r.userText ?? null,
-          say: said,
           looping: Boolean(lp) && !lp.stopped(),
           loopWakes: lp ? lp.state().wakes : 0,
         });
@@ -496,20 +495,26 @@ async function registerAll(ctx) {
       if (action === 'peek') {
         const s = runner.peek();
         const st = runner.status();
+        // **静默档不主动唤醒**（规格 §四）：常驻采集在跑，但循环不起 ——
+        // 模型想看就自己 peek，图在队列里等着。
+        const silentMode = currentMode === 'silent';
         // 走 peek 路线的会话也要有循环：不然模型摘完这一张就结束，没人再叫它。
         // **但采集都停了就别起** —— 起一个下一拍就自杀的钟只是噪音。
-        const lp = (s || st.running || st.pending) ? ensureLoop() : null;
+        const lp = silentMode ? null : ((s || st.running || st.pending) ? ensureLoop() : null);
         if (!s) {
           return {
             text: '手上还没有画面（刚开或刚发完，下一张还在攒）。\n'
-              + `循环${!lp || lp.stopped() ? '没在跑' : '在跑'} —— 攒够我会叫你；要看此刻可以调 \`see_now({action:"watch"})\`。`,
-            meta: { ok: false, reason: 'no-sheet', loop: lp?.state() ?? null },
+              + (silentMode
+                ? '静默档不主动叫你 —— 攒着的图等你 peek。要看此刻可以调 `see_now({action:"watch"})`。'
+                : `循环${!lp || lp.stopped() ? '没在跑' : '在跑'} —— 攒够我会叫你；要看此刻可以调 \`see_now({action:"watch"})\`。`),
+            meta: { ok: false, reason: 'no-sheet', loop: lp?.state() ?? null, mode: currentMode },
           };
         }
         return await attachAndReturn(ctx, s, { looping: Boolean(lp) && !lp.stopped() });
       }
 
       if (action === 'start') {
+        currentMode = null; // 模型手动拉起 → "自定义"（无循环，除非后续 watch 接管）
         const src = args.source ? { kind: String(args.source).toLowerCase() } : { kind: 'screen' };
         const r = await runner.start({ src });
         return {
@@ -520,6 +525,7 @@ async function registerAll(ctx) {
       }
 
       if (action === 'stop') {
+        currentMode = 'off'; // 模型显式停 → 等价关档
         stopLoop('手动 stop');
         runner.stop();
         return { text: '停了。窗口还开着，想再看得重新调 watch。', meta: { ok: true } };
@@ -527,7 +533,6 @@ async function registerAll(ctx) {
 
       if (action === 'status') {
         const s = runner.status();
-        const voice = voiceState();
         const lp = loop?.state() ?? null;
         return {
           text: (s.running
@@ -547,19 +552,108 @@ async function registerAll(ctx) {
             + ` · 节奏：${sceneMode ? 'dense（跟逐帧走）' : paceMode}`
             + `（切点门槛 ${(sceneMode ? PACES.dense : PACES[paceMode]).cutAbs}，`
             + `最多 ${sceneMode ? 4 : PACES[paceMode].wakeGapSec} 秒叫一次）`
-            // 声音单独一行：听不到声音时第一个要看的就是这里
-            + `\n声音：${voice.speakers > 0
-              ? `已接上 ${voice.adapters.join(', ') || '适配器'}（${voice.speakers} 个会出声的订阅者）`
-              : voice.configured
-                ? `配了 ${voice.configured} 但没挂上（${voice.reason ?? '原因未知'}）`
-                : '没配 —— 写 ~/.dsh/voice.json 的 {"adapter":"…"} 才有声音'}`,
-          meta: { ...s, voice, loop: lp },
+            // 档位单独一行：胶囊/模型侧改参后**实际生效的是哪一档**，以这里为准
+            + `\n档位：${MODES[currentMode]?.label ?? `自定义（scene=${sceneMode ? '开' : '关'} · pace=${paceMode}）`}`,
+          meta: { ...s, mode: currentMode, loop: lp },
         };
       }
 
       return { text: `未知 action: ${action}（可用 watch / peek / start / stop / status）`, meta: { action } };
     },
   };
+
+  // ── 通信面（B1 冻结）：/api/vision-toggle/* ──────────────────────────────
+  const json = (res, code, obj) => {
+    res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(obj));
+  };
+  const readBody = (req) => new Promise((resolve) => {
+    let b = '';
+    req.on('data', (c) => { b += c; if (b.length > 8192) { try { req.destroy(); } catch { /* ignore */ } resolve(null); } });
+    req.on('end', () => resolve(b));
+    req.on('error', () => resolve(null));
+  });
+
+  const apiHandler = async (req, res) => {
+    // prefix 注册：req.url 可能是完整路径也可能是 remainder，两种都兼容
+    const p = String(req.url ?? '').replace(/^.*\/api\/vision-toggle/, '') || '/';
+    try {
+      if (req.method === 'GET' && p === '/status') {
+        const s = runner.status();
+        return json(res, 200, {
+          mode: currentMode,
+          label: MODES[currentMode]?.label ?? null,
+          running: Boolean(s.running),
+          quality: s.quality ?? null,
+          pending: s.pending ?? 0,
+          sheets: s.sheets ?? 0,
+          scene: sceneMode,
+          pace: paceMode,
+          loop: loop?.state() ?? null,
+        });
+      }
+      if (req.method === 'POST' && p === '/mode') {
+        const body = await readBody(req);
+        let args = {};
+        try { args = body ? JSON.parse(body) : {}; } catch { return json(res, 400, { error: 'body 不是合法 JSON' }); }
+        const r = await applyMode(String(args.mode ?? ''), { confirmed: args.confirmed === true });
+        return json(res, r.ok ? 200 : 400, r);
+      }
+      if (req.method === 'POST' && p === '/snapshot') {
+        // 常驻唤醒在跑时 peek 会**抢走模型的图**（peek=取走语义）→ 拒绝；只在 关/静默/自定义-停 用
+        if (loop && !loop.stopped()) {
+          return json(res, 409, { error: '常驻唤醒在跑，截图会抢模型的图 —— 截图键只在 关/静默 档可用' });
+        }
+        const wasRunning = Boolean(runner.status().running);
+        if (!wasRunning) {
+          // 关档临时拉起（0.5~1s 抓 1 帧，规格 §四"截图键"）；抓完立即停
+          await runner.start({ src: { kind: 'screen' }, quality: 'standard', opts: { cutAbs: PACES.normal.cutAbs } });
+        }
+        // 等第一张图落进队列（管线首帧 'first'，通常 1~3 秒）
+        let sheet = runner.peek();
+        for (let i = 0; !sheet && i < 30; i++) {
+          await new Promise((r2) => setTimeout(r2, 150));
+          sheet = runner.peek();
+        }
+        if (!wasRunning) { try { runner.stop(); } catch { /* 已停 */ } }
+        if (!sheet) {
+          return json(res, 504, { error: wasRunning ? '静默档下一张还在攒，稍后再试' : '临时拉起采集没抓到帧' });
+        }
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+        return res.end(Buffer.from(sheet.png));
+      }
+      return json(res, 404, { error: `未知路由 ${req.method} ${p}` });
+    } catch (e) {
+      log(`api ${req.method} ${p} 失败：${e?.stack ?? e}`);
+      try { return json(res, 500, { error: String(e?.message ?? e) }); } catch { /* res 已坏 */ }
+    }
+  };
+
+  const eventsHandler = (req, res) => {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+    });
+    res.write(`data: ${JSON.stringify({ type: 'hello', seq: modeSeq, mode: currentMode, at: Date.now() })}\n\n`);
+    sseClients.add(res);
+    const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* close 会清 */ } }, 15000);
+    req.on('close', () => { clearInterval(hb); sseClients.delete(res); });
+  };
+
+  // webServer 必须走 inject（插件加载时服务未发布，ctx.get 拿到 undefined —— ofm :1404-1410 实证）
+  try {
+    ctx.inject(['webServer'], (scoped) => {
+      scoped.effect(() => scoped.webServer.register({ kind: 'prefix', path: '/api/vision-toggle', handler: apiHandler }), 'vision-toggle: api routes');
+      scoped.effect(() => scoped.webServer.register({ kind: 'exact', path: '/api/vision-toggle/events', handler: eventsHandler }), 'vision-toggle: sse');
+    });
+  } catch (e) {
+    log(`webServer 注入失败（client 胶囊不可用，工具不受影响）：${e?.message ?? e}`);
+  }
+  disposers.push(() => {
+    for (const res of sseClients) { try { res.end(); } catch { /* ignore */ } }
+    sseClients.clear();
+  });
 
   disposers.push(ctx.tools.register(defineTool(toolObj)));
 

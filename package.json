@@ -30,7 +30,11 @@
     "./runner": "./src/runner.js",
     "./loop": "./src/loop.js",
     "./timer": "./src/timer.js",
-    "./tool-spec": "./src/tool-spec.js"
+    "./tool-spec": "./src/tool-spec.js",
+    "./client": "./src/client.js",
+    "./buffer": "./src/buffer.js",
+    "./sentinel": "./src/sentinel.js",
+    "./auto-mode": "./src/autoMode.js"
   },
   "files": [
     "bin",
@@ -70,6 +74,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
     }
   },
   "license": "Apache-2.0",

@@ -41,17 +41,14 @@ export function seeNowToolSpec() {
       + 'still watching.\n'
       + '- `see_now({action:"peek"})` — grab the sheet that already piled up, without waiting. Use this '
       + 'when the plugin wakes you ("有新画面了"), because then you are not inside a `watch` any more.\n'
-      + '- `see_now({action:"status"})` — is it still watching, is the loop alive, is sound attached.\n'
+      + '- `see_now({action:"status"})` — is it still watching, is the loop alive, which mode is active.\n'
       + '- `see_now({action:"stop"})`.\n\n'
       + 'Safety net: if you ever stop calling `watch`, the plugin still keeps capturing and will wake '
       + 'you with a short note when a new sheet fills up (then `peek`). It also stops everything the '
       + 'moment the user closes the floating window, and tells you so — when that note appears, do NOT '
       + 'call `see_now` again until the user asks.\n\n'
-      + '**`say` is the ONLY channel the user can see and hear.** Your normal reply text never reaches '
-      + 'the floating window and is never spoken — only `say` is. So whenever the user might be waiting, '
-      + 'watching, or has just typed something, put what you want to tell them in `say` on the same call. '
-      + 'One `say` = one bubble = one spoken utterance, so put two or three sentences in it rather than '
-      + 'splitting them across calls.\n\n'
+      + '**The user reads your normal replies in the conversation page** — there is no separate '
+      + 'speech channel in this build. When something is worth saying, just reply normally.\n\n'
       + '**They are looking at the same screen as you, over and over.** So: do not narrate everything, '
       + 'do not repeat the sentence you already said (the tool result reminds you of it), and silence is '
       + 'a perfectly good answer — there is no quota. Say something when it actually changed or when it '
@@ -93,7 +90,7 @@ export function seeNowToolSpec() {
         type: 'boolean',
         description: '**逐帧 / 逐场景模式**，默认关。'
           + '打开后：每留下一个画面就单独给你一张**满幅**图（一张图 = 一个场景，不再拼格），'
-          + '并且每换一次画面就叫你一次，你回一句 `say` 说清那是什么。'
+          + '并且每换一次画面就叫你一次，你直接正常回复、说清那是什么。'
           + '`scene:true` 打开，`scene:false` 关掉；**它是粘性的**，一直生效到这轮看完，'
           + '不用每次 watch 都传。\n'
           + '**什么时候才该打开**：用户明确说要"每换一个场景就告诉我"、"每翻一页说一句这是什么"、'
@@ -101,13 +98,6 @@ export function seeNowToolSpec() {
           + '**平时一律不要开** —— 每次唤醒 = 一张图 + 一轮模型往返，'
           + '画面每 2 秒换一次就是每分钟 30 次唤醒，很贵，而且用户会嫌你话太多。'
           + '用户没明确这么说，就别传这个参数。',
-      },
-      say: {
-        type: 'string',
-        description: 'What you say to the user — **this is the only text they can see and hear**. '
-          + 'It goes into their floating window as one bubble and is spoken aloud once. '
-          + 'Your normal reply never reaches them. Put two or three sentences in a single `say` '
-          + 'instead of calling again just to add more.',
       },
       seconds: {
         type: 'integer',
