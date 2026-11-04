@@ -618,7 +618,7 @@ async function registerAll(ctx) {
           }
           if (!sheetB) return json(res, 504, { error: '缓冲还没攒出帧，稍等一两秒再截' });
           res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
-          res.end(sheetB);
+          res.end(sheetB.png);
           return;
         }
         const wasRunning = Boolean(runner.status().running);

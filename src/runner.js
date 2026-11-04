@@ -339,6 +339,10 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
     isHungUp() { return hungUp; },
     /** 有没有一个"已经放完、不能自动重播"的文件源 */
     endedFile() { return endedSource ? { ...endedSource } : null; },
+    /** B3/R20：拉取模式按需组图（**不消费帧**）。转发给 pipeline；没起过管线返 null。 */
+    peekSheet(maxFrames = 4, maxWaitSec = 15) {
+      return pipeline ? pipeline.peekSheet(maxFrames, maxWaitSec) : null;
+    },
     /** 这一轮开过窗没有（循环判"用户关窗"用） */
     windowWasOpen() { return false; }, // B3：悬浮窗机制已移除，恒 false（loop 兼容位）
 
