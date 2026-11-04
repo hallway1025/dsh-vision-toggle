@@ -86,6 +86,27 @@ window.__ModuleLoader__.load({
     //   ①crop 阶段：先拖框选区再标注（微信式）；Enter=全屏；选区亮窗+四周暗化+尺寸标签。
     //   ②性能：底图+已定笔预渲染进离屏 cache 层，拖动帧只做 2 次 drawImage（生涩主因=全画布逐帧重绘）。
     //   ③重截 png 更新自动回 crop 阶段。
+    const VTS_COLORS = ['#ff3b30', '#f5c518', '#34c759', '#3b82f6', '#ffffff', '#111111']
+    const VTS_WIDTHS = [2, 4, 8]
+    const VTS_WDOT = { 2: 6, 4: 10, 8: 14 }
+    const VTS_CSS = [
+      '.vts-bar{display:flex;align-items:center;background:rgba(20,20,20,.96);border-radius:12px;padding:5px 8px;box-shadow:0 4px 16px rgba(0,0,0,.5);max-width:96vw}',
+      '.vts-btn{width:34px;height:34px;margin:0 2px;border:none;border-radius:8px;background:rgba(255,255,255,.12);color:#fff;font-size:17px;cursor:pointer;padding:0;line-height:34px;text-align:center;box-sizing:border-box;transition:background .1s;flex:none}',
+      '.vts-btn:hover{background:rgba(255,255,255,.22)}',
+      '.vts-btn.vts-on{background:#4f7cff}',
+      '.vts-btn.vts-on:hover{background:#5d88ff}',
+      '.vts-dot{width:26px;height:26px;margin:0 2px;border:2px solid rgba(255,255,255,.3);border-radius:50%;cursor:pointer;padding:0;box-sizing:border-box;flex:none;transition:transform .1s}',
+      '.vts-dot:hover{transform:scale(1.15)}',
+      '.vts-dot.vts-on{border-color:#fff;box-shadow:0 0 0 2px rgba(79,124,255,.9)}',
+      '.vts-w{width:32px;height:34px;margin:0 2px;border:none;border-radius:8px;background:transparent;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;box-sizing:border-box;flex:none;transition:background .1s}',
+      '.vts-w:hover{background:rgba(255,255,255,.12)}',
+      '.vts-w.vts-on{background:#4f7cff}',
+      '.vts-sep{width:1px;height:22px;background:rgba(255,255,255,.18);margin:0 6px;flex:none}',
+      '.vts-txt{padding:5px 10px;border-radius:6px;border:none;background:transparent;color:rgba(255,255,255,.85);font-size:12px;cursor:pointer;white-space:nowrap;flex:none;transition:background .1s}',
+      '.vts-txt:hover{background:rgba(255,255,255,.12)}',
+      '.vts-txt.vts-on{background:#4f7cff;color:#fff}',
+    ].join('')
+
     function ShotEditor({ png, onClose, onDone, onResnap }) {
       const cvRef = useRef(null)
       const stRef = useRef({ ops: [], redo: [], base: null, cache: null, drawing: null })
@@ -103,6 +124,16 @@ window.__ModuleLoader__.load({
       const imgRef = useRef(null)
       const selRef = useRef(null); selRef.current = sel
       const phaseRef = useRef(phase); phaseRef.current = phase
+      // 0.7.0：工具状态 ref 直读（消灭闭包陈旧）+ 缩放/平移
+      const toolRef = useRef('rect'); const colorRef = useRef('#ff3b30'); const widthRef = useRef(4)
+      const [width, setWidth] = useState(4)
+      const [zoom, setZoom] = useState(null)          // null=适合窗口（auto fit）；数字=显式缩放
+      const zoomRef = useRef(null)
+      const [space, setSpace] = useState(false)       // Space 按住=平移模式
+      const spaceRef = useRef(false)
+      const panRef = useRef(null)                     // {sx,sy,sl,st} 平移起点
+      const wrapRef = useRef(null)                    // edit 阶段滚动容器
+      const txtRef = useRef(false)
 
       // 原图加载；png 变化（重截）自动回 crop
       useEffect(() => {
@@ -112,13 +143,22 @@ window.__ModuleLoader__.load({
         img.src = 'data:image/png;base64,' + png
       }, [png])
 
-      // Esc 分层：crop+有选区=清选区 / 其他=关；Enter(crop)=确认选区（无选区=全屏）；
-      // Ctrl+Z/Y(edit)=撤销重做；watchdog 180s 硬关（保底闸②）；React 卸载必然 cleanup
+      // Esc 分层：edit+txt 开=只关输入框 / crop+有选区=清选区 / 其他=关；Enter(crop)=确认选区（无选区=全屏）；
+      // Ctrl+Z/Y(edit)=撤销重做；Space(edit)=平移模式；输入框聚焦时按键不进编辑器热键；
+      // watchdog 180s 硬关（保底闸②）；React 卸载必然 cleanup
       useEffect(() => {
         const key = (e) => {
           const ph = phaseRef.current
+          const tag = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)
+          if (ph === 'edit' && e.code === 'Space' && !tag) {
+            e.preventDefault()
+            if (!spaceRef.current) { spaceRef.current = true; setSpace(true) }
+            return
+          }
+          if (tag) return
           if (e.key === 'Escape') {
             e.stopPropagation()
+            if (ph === 'edit' && txtRef.current) { txtValRef.current = ''; setTxtVal(''); setTxt(null); return }
             if (ph === 'crop' && selRef.current) { setSel(null); dragRef.current = null }
             else onClose()
           } else if (e.key === 'Enter' && ph === 'crop') {
@@ -129,10 +169,40 @@ window.__ModuleLoader__.load({
             e.preventDefault(); redoOp()
           }
         }
+        const kup = (e) => { if (e.code === 'Space' && spaceRef.current) { spaceRef.current = false; setSpace(false) } }
         window.addEventListener('keydown', key, true)
+        window.addEventListener('keyup', kup)
         const guard = setTimeout(() => { try { onClose() } catch {} }, 180000)
-        return () => { window.removeEventListener('keydown', key, true); clearTimeout(guard) }
+        return () => { window.removeEventListener('keydown', key, true); window.removeEventListener('keyup', kup); clearTimeout(guard) }
       }, [])
+
+      // 滚轮缩放（edit 阶段；fit 态以当前实际显示比例为基准；以鼠标为锚点补偿滚动）
+      useEffect(() => {
+        if (phase !== 'edit') return
+        const wrap = wrapRef.current
+        if (!wrap) return
+        const onWheel = (e) => {
+          e.preventDefault()
+          const cv = cvRef.current
+          if (!cv || !cv.width) return
+          const rect = cv.getBoundingClientRect()
+          if (!rect.width) return
+          const oldZ = zoomRef.current == null ? (rect.width / cv.width) : zoomRef.current
+          const nz = Math.min(4, Math.max(0.25, oldZ * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
+          const ix = (e.clientX - rect.left) / oldZ
+          const iy = (e.clientY - rect.top) / oldZ
+          zoomRef.current = nz
+          setZoom(nz)
+          requestAnimationFrame(() => {
+            const r2 = cv.getBoundingClientRect()
+            const wr = wrap.getBoundingClientRect()
+            wrap.scrollLeft = ix * nz - (e.clientX - wr.left)
+            wrap.scrollTop = iy * nz - (e.clientY - wr.top)
+          })
+        }
+        wrap.addEventListener('wheel', onWheel, { passive: false })
+        return () => wrap.removeEventListener('wheel', onWheel)
+      }, [phase])
 
       function drawOp(g, op) {
         g.strokeStyle = op.c; g.fillStyle = op.c; g.lineWidth = op.w
@@ -188,6 +258,11 @@ window.__ModuleLoader__.load({
       // 拖动跟随挂 window（React 卸载 cleanup）
       useEffect(() => {
         const mv = (e) => {
+          if (panRef.current) {
+            const wrap = wrapRef.current
+            if (wrap) { wrap.scrollLeft = panRef.current.sl - (e.clientX - panRef.current.sx); wrap.scrollTop = panRef.current.st - (e.clientY - panRef.current.sy) }
+            return
+          }
           if (!dragRef.current && !st.drawing) return
           if (phaseRef.current === 'crop' && dragRef.current) {
             const p = toImgCrop(e)
@@ -198,6 +273,7 @@ window.__ModuleLoader__.load({
           }
         }
         const up = () => {
+          if (panRef.current) { panRef.current = null; return }
           if (phaseRef.current === 'crop' && dragRef.current) {
             const r = dragRef.current; dragRef.current = null
             if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) { setSel(r); confirmRect(r) }
@@ -258,9 +334,15 @@ window.__ModuleLoader__.load({
       // ---- edit 阶段交互 ----
       const start = (e) => {
         e.preventDefault()
-        if (tool === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
+        if (e.button === 1 || spaceRef.current) {        // 中键 / Space+左键 = 平移
+          const wrap = wrapRef.current
+          if (wrap) panRef.current = { sx: e.clientX, sy: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop }
+          return
+        }
+        if (e.button !== 0) return
+        if (toolRef.current === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
         const p = toImg(e)
-        st.drawing = { t: tool, c: color, w: 3, x: p.x, y: p.y, x2: p.x, y2: p.y }
+        st.drawing = { t: toolRef.current, c: colorRef.current, w: widthRef.current, x: p.x, y: p.y, x2: p.x, y2: p.y }
       }
       const undo = () => { const op = st.ops.pop(); if (op) st.redo.push(op); redrawStatic(); redraw() }
       const redoOp = () => { const op = st.redo.pop(); if (op) st.ops.push(op); redrawStatic(); redraw() }
@@ -268,7 +350,7 @@ window.__ModuleLoader__.load({
         const v = txtValRef.current
         txtValRef.current = ''
         setTxtVal('')
-        if (txt && v.trim()) { st.ops.push({ t: 'text', c: color, w: 3, x: txt.px, y: txt.py, s: v }); st.redo = []; redrawStatic() }
+        if (txt && v.trim()) { st.ops.push({ t: 'text', c: colorRef.current, w: widthRef.current, x: txt.px, y: txt.py, s: v }); st.redo = []; redrawStatic() }
         setTxt(null)
         redraw()
       }
@@ -283,17 +365,21 @@ window.__ModuleLoader__.load({
           }, 'image/png')
         } catch { onClose() }
       }
+      const sep = (k) => h('span', { key: k, className: 'vts-sep' })
       const toolBtn = (id, label, title) => h('button', {
-        key: id, type: 'button', title, onClick: () => setTool(id),
-        style: { width: '36px', height: '36px', margin: '0 2px', borderRadius: '8px', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '30px', textAlign: 'center', padding: 0, border: tool === id ? '2px solid #4f7cff' : '2px solid transparent', transition: 'background .12s' },
+        key: id, type: 'button', title, className: 'vts-btn' + (tool === id ? ' vts-on' : ''),
+        onClick: () => { toolRef.current = id; setTool(id) },
       }, label)
-      const colorBtn = (id, c, title) => h('button', {
-        key: id, type: 'button', title, onClick: () => setColor(c),
-        style: { width: '30px', height: '30px', margin: '3px 2px', borderRadius: '50%', background: c, cursor: 'pointer', padding: 0, border: color === c ? '2px solid #fff' : '2px solid transparent', transition: 'border .12s' },
+      const colorBtn = (c) => h('button', {
+        key: c, type: 'button', title: '颜色 ' + c, className: 'vts-dot' + (color === c ? ' vts-on' : ''),
+        style: { background: c }, onClick: () => { colorRef.current = c; setColor(c) },
       })
-      const barBtn = (label, title, bg, onClick) => h('button', {
-        key: label, type: 'button', title, onClick,
-        style: { width: '36px', height: '36px', margin: '0 2px', border: 'none', borderRadius: '8px', background: bg, color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '36px', textAlign: 'center', padding: 0, transition: 'background .12s' },
+      const widthBtn = (w) => h('button', {
+        key: 'w' + w, type: 'button', title: '线条粗细 ' + w, className: 'vts-w' + (width === w ? ' vts-on' : ''),
+        onClick: () => { widthRef.current = w; setWidth(w) },
+      }, h('span', { style: { display: 'block', width: VTS_WDOT[w] + 'px', height: VTS_WDOT[w] + 'px', borderRadius: '50%', background: color } }))
+      const barBtn = (label, title, onClick, bg) => h('button', {
+        key: title, type: 'button', title, className: 'vts-btn', style: bg ? { background: bg } : null, onClick,
       }, label)
 
       if (!ready) {
@@ -302,43 +388,64 @@ window.__ModuleLoader__.load({
       }
       const img = imgRef.current
       const liveSel = dragRef.current ?? sel
+      txtRef.current = !!txt
       const box = (r) => ({
         left: (Math.min(r.x, r.x2) / img.naturalWidth * 100) + '%',
         top: (Math.min(r.y, r.y2) / img.naturalHeight * 100) + '%',
         width: (Math.abs(r.x2 - r.x) / img.naturalWidth * 100) + '%',
         height: (Math.abs(r.y2 - r.y) / img.naturalHeight * 100) + '%',
       })
+      // 缩放渲染：null=适合（max 约束）；数字=显式宽高
+      const cvsW = st.base ? st.base.width : 0
+      const cvsH = st.base ? st.base.height : 0
+      const cvsStyle = zoom == null
+        ? { maxWidth: '94vw', maxHeight: '76vh', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
+        : { width: Math.round(cvsW * zoom) + 'px', height: Math.round(cvsH * zoom) + 'px', maxWidth: 'none', maxHeight: 'none', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
+      const zoomLabel = zoom == null ? '适合' : Math.round(zoom * 100) + '%'
       return h('div', {
         style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
+        onContextMenu: (e) => e.preventDefault(),
         onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③
       },
-        // 顶部条：crop 阶段=提示；edit 阶段=工具条
-        phase === 'crop'
-          ? h('div', { style: { position: 'absolute', top: '14px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '8px 14px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
-              h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px' } }, '拖动框选 · 松手进入标注（全屏=不框选直接标注）'),
-              h('button', { type: 'button', onClick: () => confirmCrop(true), style: { padding: '4px 12px', borderRadius: '6px', border: 'none', background: '#2ea44f', color: '#fff', fontSize: '12px', cursor: 'pointer' } }, '全屏'),
-            )
-          : h('div', { style: { position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '4px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
-              toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
-              colorBtn('c-red', '#ff3b30', '红色'), colorBtn('c-blue', '#3b82f6', '蓝色'), colorBtn('c-yel', '#f5c518', '黄色'),
-              barBtn('↶', '撤销 (Ctrl+Z)', 'rgba(255,255,255,.12)', undo),
-              barBtn('↷', '重做 (Ctrl+Y)', 'rgba(255,255,255,.12)', redoOp),
-              h('span', { style: { width: '8px' } }),
-              barBtn('↺', '重新框选（回到选区）', 'rgba(255,255,255,.2)', () => { setPhase('crop'); setSel(null) }),
-              barBtn('✗', '重截（重新抓屏）', '#d29922', onResnap),
-              barBtn('✓', '完成，贴进聊天框', '#2ea44f', finish),
-            ),
+        h('style', null, VTS_CSS),
         h('button', { type: 'button', title: '关闭编辑器（不贴图）', onClick: onClose, style: { position: 'absolute', top: '12px', right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer', zIndex: 3 } }, '✕'),
-        // 主体
+        // 主体（上图下条，QQ 同款：工具条贴图下方）
         phase === 'crop'
-          ? h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
-              h('img', { ref: cropImgRef, src: 'data:image/png;base64,' + png, draggable: false, onMouseDown: cropStart, style: { display: 'block', maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', userSelect: 'none' } }),
-              liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
-                h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
-                  Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
-              ) : null,
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
+              h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
+                h('img', { ref: cropImgRef, src: 'data:image/png;base64,' + png, draggable: false, onMouseDown: cropStart, style: { display: 'block', maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', userSelect: 'none' } }),
+                liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
+                  h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
+                    Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
+                ) : null,
+              ),
+              h('div', { className: 'vts-bar' },
+                h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px', padding: '0 6px', whiteSpace: 'nowrap' } }, '拖动框选 · 松手进入标注'),
+                h('button', { type: 'button', title: '全屏（不框选直接标注）', onClick: () => confirmCrop(true), className: 'vts-btn', style: { background: '#2ea44f', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '全屏'),
+              ),
             )
-          : h('canvas', { ref: cvRef, onMouseDown: start, style: { maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' } }),
+          : h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
+              h('div', { ref: wrapRef, style: { overflow: 'auto', maxWidth: '94vw', maxHeight: '76vh', lineHeight: 0 } },
+                h('canvas', { ref: cvRef, onMouseDown: start, style: cvsStyle }),
+              ),
+              h('div', { className: 'vts-bar' },
+                toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
+                sep('s1'),
+                VTS_COLORS.map((c) => colorBtn(c)),
+                sep('s2'),
+                VTS_WIDTHS.map((w) => widthBtn(w)),
+                sep('s3'),
+                barBtn('↶', '撤销 (Ctrl+Z)', undo), barBtn('↷', '重做 (Ctrl+Y)', redoOp),
+                sep('s4'),
+                h('button', { key: 'fit', type: 'button', title: '适合窗口 · 滚轮缩放（25%~400%）· Space 或中键拖动平移', className: 'vts-txt' + (zoom == null ? ' vts-on' : ''), onClick: () => { zoomRef.current = null; setZoom(null) } }, '适合'),
+                h('button', { key: 'z100', type: 'button', title: '原始大小 1:1', className: 'vts-txt' + (zoom === 1 ? ' vts-on' : ''), onClick: () => { zoomRef.current = 1; setZoom(1) } }, '1:1'),
+                h('span', { key: 'zl', style: { color: 'rgba(255,255,255,.6)', fontSize: '12px', minWidth: '44px', textAlign: 'center' } }, zoomLabel),
+                sep('s5'),
+                barBtn('↺', '重新框选（回到选区）', () => { zoomRef.current = null; setZoom(null); setPhase('crop'); setSel(null) }),
+                barBtn('✗', '重截（重新抓屏）', onResnap, '#d29922'),
+                barBtn('✓', '完成，贴进聊天框', finish, '#2ea44f'),
+              ),
+            ),
         // 文字输入（edit 阶段）
         txt ? h('input', {
           autoFocus: true, value: txtVal,
@@ -353,7 +460,7 @@ window.__ModuleLoader__.load({
         }) : null,
         // 底部提示
         h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } },
-          phase === 'crop' ? '拖动框选 · Enter=全屏 · Esc 关闭' : '标注后 ✓ 贴进聊天框 · ↺ 重新框选 · Esc 关闭'),
+          phase === 'crop' ? 'Esc 关闭' : '标注后 ✓ 贴进聊天框 · 滚轮缩放 · Space/中键拖动平移 · Esc 关闭'),
       )
     }
 

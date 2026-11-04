@@ -7,21 +7,21 @@
 
 | 项 | 值 |
 |---|---|
-| 插件版本 | 0.6.0（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
-| 发布包 | dsh-vision-toggle-0.6.0.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
-| 本版提交 | 063a12a（微信式直插）+ 版本件提交（见 git log 0.6.0 段） |
+| 插件版本 | 0.7.0（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
+| 发布包 | dsh-vision-toggle-0.7.0.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
+| 本版提交 | 81400ad（0.6.3 ddagrab+拖选即确认）+ 0.7.0 编辑器五项提交（见 git log 0.7.0 段） |
 | 形式规格 | **v4.5 ultra 拉取化**（不在包内；`vision_modes_spec.md` 与源码同仓维护，位于 fork 所在仓库的 `memory/vision/` 目录） |
 | 上游 | dsh-see-now 0.0.7（Apache-2.0，LICENSE/NOTICE 原样保留） |
 | 档位 | 六档：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra / custom；拉取档 wakeGapSec=∞ 零投递 |
 | 默认档 | off（DEFAULT_MODE，进程重启必回 off） |
-| 0.3.0 发布包 | 已被 0.6.0 取代，历史包在 fork/_archive/ |
+| 0.6.0 发布包 | 已被 0.7.0 取代，历史包在 fork/_archive/ |
 
 ## 版本声明分布（哪里有版本号，改版本改哪里）
 
 1. package.json:3 `version`
 2. dsh.plugin.json:4 `version`
-3. ERRORS.md:1 标题 `（v0.6.0）`
-4. CHANGELOG.md 段头（`## 0.6.0 —`）
+3. ERRORS.md:1 标题 `（v0.7.0）`
+4. CHANGELOG.md 段头（`## 0.7.0 —`）
 5. src 注释里的版本行（runner.js:76 / index.js:195 / config.js:21 / dialog.js:6 / client.js:12）——历史语义注记，不随小版本改
 
 ## 审查轨迹（七轮收敛 + 0.6.0 自查）
@@ -37,6 +37,10 @@
 | 七 | 0.3.0-fa8c3e1 | 无新发现，可发 |
 | 终审 | 0.3.0-fa8c3e1（发布级逐行） | T1 契约文本/T2 autoMode 注释已修；T3 证伪（zip 实测 43 entries 无 .tmp，审查人测试区解包后跑 smoke 自造 stub 污染，git archive 不可能带 untracked）；代码行为级 0 bug，定档 |
 | 0.6.0 自查 | 063a12a（微信式直插） | 实测驱动：D 路 paste-keys 报成功但剪贴板 EMPTY（OLE 进程退出丢失）→ 服务端投递全删；/diag 实锤 import('electron') 空对象 → editor.js BrowserWindow 版废，编辑层整体移植 client 页面内；16 断言+22 文件语法+smoke 全过 |
+| 0.6.1 | b2dd58e | 编辑层锁死事故（m09567，body 孤儿层无销毁路径）→ React 条件渲染化+四道保底闸；主人验收通过 |
+| 0.6.2 | 34454f3 | 主人反馈框选+流畅度 → crop 框选阶段+离屏缓存性能层（拖动帧 2 次 drawImage） |
+| 0.6.3 | 81400ad | 主人反馈黑斑+多余 Enter → ddagrab 优先（GPU 桌面复制）+拖选松手即确认；1920×1200 实测零黑斑 |
+| 0.7.0 | 见 git log 0.7.0 段 | 主人六条反馈（黑方块光标/缩放/生涩/切不回/颜色/先调研）→ 调研 Flameshot/QQ/Snipaste 后五项改造；工具 ref 化根治闭包陈旧 |
 
 ## 上游遗留物处置（版本统一巡检 2026-11-04）
 

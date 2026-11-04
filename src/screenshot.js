@@ -67,7 +67,7 @@ export async function grabFullScreen(ffmpegPath) {
     try {
       await spawnFile(ffmpegPath, [
         '-hide_banner', '-loglevel', 'error',
-        '-filter_complex', 'ddagrab,hwdownload,format=bgra',
+        '-filter_complex', 'ddagrab=draw_mouse=0,hwdownload,format=bgra',
         '-frames:v', '1',
         '-y', tmp + '-dda.png',
       ], { timeout: 15000 });
