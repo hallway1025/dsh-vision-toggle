@@ -637,8 +637,19 @@ async function registerAll(ctx) {
     });
     res.write(`data: ${JSON.stringify({ type: 'hello', seq: modeSeq, mode: currentMode, at: Date.now() })}\n\n`);
     sseClients.add(res);
-    const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* close 会清 */ } }, 15000);
-    req.on('close', () => { clearInterval(hb); sseClients.delete(res); });
+    const cleanup = () => {
+      if (hb) clearInterval(hb);
+      sseClients.delete(res);
+    };
+    // L-242：客户端断开时 res 会异步 emit 'error'（ECONNRESET/EPIPE）——无人监听=uncaughtException=崩宿主。
+    // try/catch 只能抓同步 throw，抓不住事件；必须显式 on('error') 吞掉。
+    const hb = setInterval(() => {
+      if (res.destroyed || res.writableEnded) return cleanup();
+      try { res.write(': hb\n\n'); } catch { cleanup(); }
+    }, 15000);
+    res.on('error', cleanup);
+    res.on('close', cleanup);
+    req.on('close', cleanup);
   };
 
   // webServer 必须走 inject（插件加载时服务未发布，ctx.get 拿到 undefined —— ofm :1404-1410 实证）
