@@ -200,8 +200,8 @@ window.__ModuleLoader__.load({
         const up = () => {
           if (phaseRef.current === 'crop' && dragRef.current) {
             const r = dragRef.current; dragRef.current = null
-            if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) setSel(r)
-            setDragTick((t) => t + 1)
+            if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) { setSel(r); confirmRect(r) }
+            else setDragTick((t) => t + 1)
             return
           }
           if (phaseRef.current === 'edit' && st.drawing) {
@@ -229,9 +229,9 @@ window.__ModuleLoader__.load({
         dragRef.current = { x: p.x, y: p.y, x2: p.x, y2: p.y }
         setSel(null)
       }
-      function confirmCrop(forceFull) {
+      function confirmRect(r) {
         const img = imgRef.current
-        const r = forceFull ? null : selRef.current
+        if (!img) return
         let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight
         if (r) {
           sx = Math.max(0, Math.min(r.x, r.x2)); sy = Math.max(0, Math.min(r.y, r.y2))
@@ -242,7 +242,10 @@ window.__ModuleLoader__.load({
         c.width = sw; c.height = sh
         c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
         st.base = c; st.ops = []; st.redo = []; st.cache = null
-        setPhase('edit')
+        setSel(null); setPhase('edit')
+      }
+      function confirmCrop(forceFull) {
+        confirmRect(forceFull ? null : selRef.current)
       }
       // edit 阶段画布初始化（base=裁剪后 canvas）
       useEffect(() => {
@@ -312,7 +315,7 @@ window.__ModuleLoader__.load({
         // 顶部条：crop 阶段=提示；edit 阶段=工具条
         phase === 'crop'
           ? h('div', { style: { position: 'absolute', top: '14px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '8px 14px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
-              h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px' } }, '拖动框选范围（Enter=全屏）'),
+              h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px' } }, '拖动框选 · 松手进入标注（全屏=不框选直接标注）'),
               h('button', { type: 'button', onClick: () => confirmCrop(true), style: { padding: '4px 12px', borderRadius: '6px', border: 'none', background: '#2ea44f', color: '#fff', fontSize: '12px', cursor: 'pointer' } }, '全屏'),
             )
           : h('div', { style: { position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '4px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },

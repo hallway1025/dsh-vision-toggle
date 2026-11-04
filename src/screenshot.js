@@ -56,23 +56,44 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── gdigrab 全屏单帧（原生分辨率）──
 export async function grabFullScreen(ffmpegPath) {
   // 写临时文件比 stdout 稳（Windows 下 ffmpeg 图片管道偶有 -f image2pipe 边界问题）
+  // 黑斑修复：gdigrab 抓 Chromium/Electron 的 GPU 合成层会随机出黑块（显存未同步），
+  // 首选 ddagrab（Desktop Duplication API，D3D11 表面完美抓取，ffmpeg>=6）；不可用则 gdigrab 连抓 5 帧取最后（GPU 层随时间稳定）。
   const os = await import('node:os');
   const path = await import('node:path');
   const fsp = await import('node:fs/promises');
-  const out = path.join(os.tmpdir(), 'dsh-shot-' + Date.now() + '-' + process.pid + '.png');
+  const tmp = path.join(os.tmpdir(), 'dsh-shot-' + Date.now() + '-' + process.pid);
+  const isPng = (b) => b && b.length > 8 && b.readUInt32BE(0) === 0x89504e47;
   try {
+    try {
+      await spawnFile(ffmpegPath, [
+        '-hide_banner', '-loglevel', 'error',
+        '-filter_complex', 'ddagrab,hwdownload,format=bgra',
+        '-frames:v', '1',
+        '-y', tmp + '-dda.png',
+      ], { timeout: 15000 });
+      const buf = await fsp.readFile(tmp + '-dda.png').catch(() => null);
+      if (isPng(buf)) return buf;
+      log('ddagrab 输出无效，回退 gdigrab 多帧');
+    } catch (e) {
+      log('ddagrab 不可用（回退 gdigrab 多帧）:', e && e.message);
+    }
     await spawnFile(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
-      '-f', 'gdigrab', '-framerate', '2',
+      '-f', 'gdigrab', '-framerate', '30',
       '-i', 'desktop',
-      '-frames:v', '1',
-      '-y', out,
+      '-frames:v', '5',
+      '-y', tmp + '-%d.png',
     ], { timeout: 15000 });
-    const buf = await fsp.readFile(out);
-    if (!buf.length || buf.readUInt32BE(0) !== 0x89504e47) throw new Error('输出不是 PNG');
-    return buf;
+    let last = null;
+    for (let n = 1; n <= 9; n++) {
+      const b = await fsp.readFile(tmp + '-' + n + '.png').catch(() => null);
+      if (isPng(b)) last = b;
+    }
+    if (!last) throw new Error('输出不是 PNG');
+    return last;
   } finally {
-    fsp.unlink(out).catch(() => {});
+    fsp.unlink(tmp + '-dda.png').catch(() => {});
+    for (let n = 1; n <= 9; n++) fsp.unlink(tmp + '-' + n + '.png').catch(() => {});
   }
 }
 
