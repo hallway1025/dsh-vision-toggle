@@ -8,7 +8,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+import fs from 'node:fs';
 const src = join(root, 'src/index.js');
+// R30：stub 自举——干净 checkout 也能跑（第五轮审查修复项）
+const stubDir = join(root, '.tmp');
+fs.mkdirSync(stubDir, { recursive: true });
+fs.writeFileSync(join(stubDir, 'stub-dsh-tools.mjs'), 'export function defineTool(spec) { return spec }\n');
 process.env.DSH_TOOLS_PATH = join(root, '.tmp/stub-dsh-tools.mjs');
 
 const registered = { tools: [], slots: [], routes: [], effects: [] };
