@@ -14,6 +14,7 @@
 | 上游 | dsh-see-now 0.0.7（Apache-2.0，LICENSE/NOTICE 原样保留） |
 | 档位 | 六档：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra / custom；拉取档 wakeGapSec=∞ 零投递 |
 | 默认档 | off（DEFAULT_MODE，进程重启必回 off） |
+| 正式发布包 | dsh-vision-toggle-0.3.0.zip（无哈希短名）= **git 66b1701**；内部代次开发包才带短哈希，发布名固定 <pkg>-<ver>.zip |
 
 ## 版本声明分布（哪里有版本号，改版本改哪里）
 
