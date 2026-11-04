@@ -25,7 +25,7 @@ const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh');
 const PROFILE = process.env.DSH_PROFILE || 'desktop';
 const PROFILE_DIR = join(DSH_HOME, 'profiles', PROFILE);
 const MODULES = join(PROFILE_DIR, 'node_modules');
-const PKG_NAME = 'dsh-see-now';
+const PKG_NAME = 'dsh-vision-toggle'; // 0.3.0 版本统一：fork 前遗留指向上游名，dev 装机会装错对象
 
 // `.tmp` 要跳过（调试产物、被占用的文件会让 cp 中途失败）；
 // `debug` 是开发期的调试窗，**不进插件**（也故意不写进 package.json 的 files）。
@@ -86,7 +86,7 @@ if (mode === 'check') {
 if (mode === 'remove') {
   await rm(join(MODULES, PKG_NAME), { recursive: true, force: true });
   await editProfile({ add: false });
-  console.log('已卸载 see-now。重启 DSH 生效。');
+  console.log(`已卸载 ${PKG_NAME}。重启 DSH 生效。`);
   await report();
   process.exit(0);
 }
@@ -97,5 +97,5 @@ await cp(HERE, join(MODULES, PKG_NAME), {
   filter: (s) => !SKIP.has(s.split(/[\\/]/).pop()),
 });
 await editProfile({ add: true });
-console.log('已安装。重启 DSH 生效，然后让模型调 `see_now({ action: "watch" })`。');
+console.log(`已安装。重启 DSH 生效，然后让模型调 \`vision({ action: "watch" })\`。`);
 await report();

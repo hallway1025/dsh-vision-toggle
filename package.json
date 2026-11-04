@@ -75,13 +75,5 @@
       "inject": []
     }
   },
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/SAOS-3624/dsh-see-now.git"
-  },
-  "homepage": "https://github.com/SAOS-3624/dsh-see-now#readme",
-  "bugs": {
-    "url": "https://github.com/SAOS-3624/dsh-see-now/issues"
-  }
+  "license": "Apache-2.0"
 }
