@@ -20,8 +20,8 @@
  * - O8：每 6 帧评 1 次，输入 64×36 网格复用（sampleEvery=6，降级后 12）。
  *
  * ## 决策分层（O9）
- * evaluate 的结果**只标 worthReading flag**——它是 autoMode 决策器的输入之一，
- * 不直接触发档位升降。档位升降判据主体在 autoMode.js（纯代码层）。
+ * evaluate 的结果**只标 worthReading flag**，不直接触发档位升降。
+ * （历史注：autoMode 决策器已随 0.3.0 删除；本文件现为 v2 预留接口未接线——见 README 模块地图。未来若复活自动档，判据主体放纯代码层。）
  */
 
 /** 滑动窗口长度（evaluate 耗时样本数） */

@@ -528,7 +528,7 @@ async function registerAll(ctx) {
             ? `在看 ${s.source?.kind} @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
               + `${s.lastError ? `\n⚠ ${s.lastError}` : ''}`
             : `没在采集（${s.idleSec}s 前停的）${s.lastError ? `\n⚠ ${s.lastError}` : ''}`)
-            // 循环=纯采集监护（主动看改造）：只攒帧+喂决策器，零投递
+            // 循环=纯采集监护（主动看改造）：只攒帧，零投递（喂决策器的接缝已随 autoMode 删除而闲置）
             + `\n监护：${lp && !lp.stopped
               ? `在跑（${lp.ticks} 拍，攒帧不叫人）`
               : lp?.reason ? `已停（${lp.reason}）` : '没起'}`

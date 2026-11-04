@@ -1,5 +1,5 @@
 /**
- * loop.js — 采集监护：让采集活着、让缓冲攒着、让决策器跳着。
+ * loop.js — 采集监护：让采集活着、让缓冲攒着。
  *
  * ## 为什么这一层什么都不叫醒
  *
@@ -9,7 +9,7 @@
  *
  * 主动看改造（2026-11-04）：循环**只做三件事**——
  *   ① 采集死了就喊停（onStop）；
- *   ② 每拍喂一次 autoMode 决策器（静止降档是时间统计）；
+ *   ② onTick 接缝：每拍回调（0.3.0 起 autoMode 已删，宿主未传 onTick，恒空）；
  *   ③ 帧持续入环形缓冲（pipeline 层）。
  * 模型在自己的回合里查 status（bufferedNew>0 即有新画面）→ 主动 peek。
  * 没有任何投递路径：wakeWithRetry 本模块已不引用。
@@ -26,7 +26,7 @@ const TICK_MS = 2000;
  * @param {object} o.runner createRunner() 的返回值
  * @param {(m:string)=>void} [o.log]
  * @param {(reason:string)=>void} [o.onStop] 采集死亡时回调（同步档位状态）
- * @param {(now:number)=>void} [o.onTick] 每拍回调（autoMode 心跳驱动，R24）
+ * @param {(now:number)=>void} [o.onTick] 每拍回调（R24 接缝；autoMode 已随 0.3.0 删除，无调用方传入，恒空）
  * @returns {{dispose:()=>void, state:()=>object, stopped:()=>boolean}}
  */
 export function startLoop({
@@ -50,8 +50,8 @@ export function startLoop({
       if (disposed) return;
       tickCount += 1;
 
-      // ① autoMode 心跳（静止降档/建议关档是时间统计，每拍喂一次）
-      try { onTick?.(now); } catch { /* 决策器坏了不影响监护 */ }
+      // ① onTick 心跳接缝（autoMode 已删，恒空；接缝保留供未来决策器复用）
+      try { onTick?.(now); } catch { /* 回调异常不影响监护 */ }
 
       // ② 采集死了就收。**续命放在判定之前**：静态画面下 60 秒不出图，
       //    宽限期会把采集收走，那时 !running 是"没人来取"而不是"坏了"。

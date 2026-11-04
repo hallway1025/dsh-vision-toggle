@@ -12,6 +12,7 @@
 - **删 autoPilot / autoMode.js**（auto 档决策器成死代码）；修 applyMode 内 pace 撞名（SyntaxError）与 log 行 ${pace} 陈旧引用（运行时 ReferenceError）。
 - **规格同步**：形式规格 v4.4（六档重定义版，memory/vision/vision_modes_spec.md）——拉取档零投递 wakeGapSec=∞、LEGACY 迁移、409 删除、ultra 每分钟口径、sentinel v2 预留。
 - **版本统一 + 台账**：install-dev.mjs 改装本包（fork 遗留装错对象）、删 sync-window.mjs（目标 window.js 已丢弃）、package.json 删指向上游仓库的三字段；新增 VERSIONS.md 随包走（版本声明分布/审查轨迹/遗留物处置/命名规则）。
+- **定档终审收口**：tool-spec.js 契约文本旧五档中文名→六档（T1，模型读得到）；loop/sentinel/index 注释 autoMode 引用改历史注（T2）；ERRORS.md 201/504 边界精确化；终审 T3（zip 混 .tmp）证伪——两包 zipfile 核验 43 entries 无 .tmp。
 ## 0.2.0 — 2026-11-04（主动看改造）
 
 核心语义从「被动推送唤醒」改为「主动拉取观看」（Active viewing, not push）：
