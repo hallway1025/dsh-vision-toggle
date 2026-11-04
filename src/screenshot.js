@@ -91,6 +91,43 @@ export async function getElectron() {
   return (mod && mod.clipboard && mod.nativeImage) ? mod : null;
 }
 
+// ── D 路：PowerShell 写剪贴板（不依赖 electron API；keys=true 时恢复焦点后 SendKeys ^v）──
+const CLIP_PS = [
+  'param([string]$Path, [switch]$Keys)',
+  'Add-Type -AssemblyName PresentationFramework',
+  '$bytes = [System.IO.File]::ReadAllBytes($Path)',
+  '$ms = New-Object System.IO.MemoryStream(,$bytes)',
+  '$dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create($ms, [System.Windows.Media.Imaging.BitmapCreateOptions]::None, [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)',
+  '[System.Windows.Clipboard]::SetImage($dec.Frames[0])',
+  'if ($Keys) { Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 350; [System.Windows.Forms.SendKeys]::SendWait("^v") }',
+  'Write-Output "clip-ok"',
+].join("\n");
+
+export async function deliverViaPowerShell(pngBuf, { keys = false } = {}) {
+  const [{ join }, { tmpdir }, fsp] = await Promise.all([
+    import("node:path"), import("node:os"), import("node:fs/promises"),
+  ]);
+  const stamp = Date.now();
+  const pngPath = join(tmpdir(), `shot-${stamp}.png`);
+  const psPath = join(tmpdir(), `shot-clip-${stamp}.ps1`);
+  await fsp.writeFile(pngPath, pngBuf);
+  await fsp.writeFile(psPath, CLIP_PS, "utf8");
+  try {
+    const args = ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", psPath, "-Path", pngPath];
+    if (keys) args.push("-Keys");
+    const out = await spawnFile("powershell.exe", args, 15000);
+    const ok = /clip-ok/.test(out.stdout ?? "");
+    if (!ok) { log("D 路剪贴板写入失败:", (out.stderr ?? "").slice(0, 200)); return { delivered: "unavailable" }; }
+    return { delivered: keys ? "paste-keys" : "clipboard" };
+  } catch (e) {
+    log("D 路异常:", e?.message ?? e);
+    return { delivered: "unavailable" };
+  } finally {
+    try { await fsp.unlink(psPath); } catch { }
+    try { await fsp.unlink(pngPath); } catch { }
+  }
+}
+
 // ── Electron A 路：写剪贴板 + 对聊天窗口模拟粘贴 ──
 async function deliverViaElectron(pngBuf, electron) {
   const mod = electron ?? (await getElectron());
@@ -118,14 +155,14 @@ async function deliverViaElectron(pngBuf, electron) {
  * 一条龙：隐藏宿主窗 → gdigrab 抓屏 → Electron 写剪贴板+粘贴 → 恢复宿主窗。
  * hide=false 时跳过隐藏/恢复（抓到画面里会有 DSH 自己）。
  */
-export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, electron = null }) {
+export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, electron = null, keys = true }) {
   // 编辑流程（0.6.0）：编辑器自己管 隐藏-抓屏-恢复 + ✗ 重截，这里只管结果投递
   if (edit) {
     const { editShotFlow } = await import('./editor.js');
     const r = await editShotFlow({ ffmpegPath, electron });
     if (r.cancelled || !r.png) return { png: null, cancelled: true, hidden: 'skipped' };
-    const delivered = await deliverViaElectron(r.png, electron);
-    return { png: r.png, delivered, hidden: 'ok' };
+    const d = await deliverViaElectron(r.png, electron);
+    return { png: r.png, delivered: d.delivered, hidden: 'ok' };
   }
   const pid = process.pid; // 插件 server 跑在宿主 main 进程内
   let hidden = 'skipped';
@@ -142,6 +179,10 @@ export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, el
       await setHostWindow(pid, 9); // 无条件恢复
     }
   }
-  const delivered = await deliverViaElectron(png, electron);
-  return { png, delivered, hidden };
+  let d = await deliverViaElectron(png, electron);
+  if (d.delivered === 'unavailable') {
+    // A 路不可达（插件进程拿不到 electron API）：D 路 = PowerShell 剪贴板写图（可选 SendKeys ^v）
+    d = await deliverViaPowerShell(png, { keys: keys !== false });
+  }
+  return { png, delivered: d.delivered, hidden };
 }

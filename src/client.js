@@ -171,6 +171,8 @@ window.__ModuleLoader__.load({
         if (busy) return
         setBusy(true); setErr(null); setHint(null)
         try {
+          // 焦点先交给聊天输入框：服务端恢复窗口后 SendKeys ^v / paste 才落进编辑器
+          try { document.querySelector('[contenteditable="true"]')?.focus?.() } catch { /* 找不到就算了 */ }
           const r = await fetch(API + '/screenshot', {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
           })
@@ -181,7 +183,11 @@ window.__ModuleLoader__.load({
             setHint('截图已贴到输入框'); setTimeout(() => setHint(null), 2600)
             return
           }
-          // clipboard-only（服务端已写剪贴板）或 unavailable（前端来写）
+          if (j.delivered === 'paste-keys') {
+            setHint('截图已写剪贴板并模拟 Ctrl+V，若没进聊天框请手动 Ctrl+V'); setTimeout(() => setHint(null), 5000)
+            return
+          }
+          // clipboard-only / clipboard（服务端已写剪贴板）或 unavailable（前端来写）
           if (j.delivered === 'unavailable' && j.png) {
             const bin = atob(j.png)
             const bytes = new Uint8Array(bin.length)

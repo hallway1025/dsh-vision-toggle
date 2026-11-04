@@ -607,6 +607,18 @@ async function registerAll(ctx) {
         });
         return json(res, r.ok ? 200 : 400, r);
       }
+      if (req.method === 'GET' && p === '/diag') {
+        // 诊断：进程形态 + electron 通道探测（A 路不可达时一发定位）
+        let probe = 'ok';
+        try {
+          const m = await import('electron');
+          const mod = m?.default ?? m;
+          probe = typeof mod === 'string' ? ('import 返回路径字符串(非electron运行时): ' + String(mod).slice(0, 80))
+            : 'import 返回对象 keys=' + Object.keys(mod ?? {}).slice(0, 10).join(',');
+        } catch (e) { probe = 'import throw: ' + (e?.message ?? e); }
+        return json(res, 200, { ok: true, pid: process.pid, ppid: process.ppid ?? null, ptype: process.type ?? null,
+          node: process.versions.node, electronVer: process.versions.electron ?? null, probe });
+      }
       if (req.method === 'POST' && p === '/screenshot') {
         // 截图键 v2（0.5.0 基座）：gdigrab 全屏原生分辨率，隐藏-恢复宿主窗，
         // A 路 = Electron 剪贴板 + webContents.paste() 直进聊天框。
