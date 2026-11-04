@@ -255,7 +255,8 @@ async function registerAll(ctx) {
     const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[pace].cutAbs };
     if (m.pullMode) opts.pullMode = true;   // B3/R20：拉取档位帧进环形缓冲
     const st = await runner.start({ src: { kind: 'screen' }, quality: m.quality, opts });
-    if (m.wakeGapSec !== Infinity) ensureLoop();
+    // 主动看改造：拉取档统一起**监护循环**（只攒帧+心跳，零投递）；ultra 推送档不用。
+    if (m.pullMode) ensureLoop();
     log(`档位 → ${m.label}（quality=${m.quality} pace=${pace}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}）`);
     broadcastMode();
     saveConfig({ mode: modeId, pace: paceMode, quality: m.quality }, { log });
@@ -318,29 +319,18 @@ async function registerAll(ctx) {
       loopScene = null;
       return null;
     }
-    const sid = owner ?? lastSessionId;
-    // 模式和节奏都影响唤醒间隔，任一个变了都得重建循环
-    const key = sceneMode ? 'scene' : paceMode;
-    if (loop && !loop.stopped() && loop.state().session === sid && loopScene === key) return loop;
-    if (loop) stopLoop(loop.state().session ? '换会话' : '重建');
-    loopScene = key;
+    if (loop && !loop.stopped()) return loop;
+    if (loop) stopLoop('重建');
     loop = startLoop({
-      ctx,
-      sessionId: sid,
-      getSessionId: () => lastSessionId,
       runner,
       log,
-      scene: sceneMode,
-      // 逐帧模式出图最密，4 秒是"一句短话念得完"的下限；
-      // 常规按节奏走（normal 15 秒 / calm 30 秒）—— 8 秒一次太吵，实报过。
-      wakeMinGapSec: sceneMode ? 4 : PACES[paceMode].wakeGapSec,
       onStop: (reason) => {
         try { runner.stop(); } catch { /* 已经停了 */ }
       },
       // R24：autoMode 心跳驱动（静止降档/15min 建议关档都是时间统计）
       onTick: (now) => { try { autoPilot?.poll(now); } catch { /* 决策器坏了不影响循环 */ } },
     });
-    log(`常驻循环已启动（会话 ${sid ?? '未知'}）`);
+    log('采集监护已启动（攒帧+心跳，零投递）');
     return loop;
   };
 
@@ -421,11 +411,6 @@ async function registerAll(ctx) {
       }
 
       if (action === 'watch') {
-        // **循环的 owner 必须在等待开始前锁定**。`runner.watch()` 会阻塞 15~40 秒，
-        // 这期间任何会话的 `session/event` 都会改写 `lastSessionId`；等它返回再
-        // `ensureLoop()` 现取，就会把后续唤醒投到"等待期间最后说话的那个会话"去
-        // （issue #1 的复现：watch 在 A 会话发起，结束后循环绑到了 B）。
-        const ownerAtStart = lastSessionId;
         const src = args.source ? {
           kind: String(args.source).toLowerCase(), path: args.path, realtime: args.realtime === true,
         } : null;
@@ -501,36 +486,33 @@ async function registerAll(ctx) {
             meta: { ok: false, reason: r.reason, waited: +r.waited.toFixed(1) },
           };
         }
-        // **拿到第一张图之后就把钟起起来** —— 这是"看一眼就完"和"一直看下去"的分界线。
-        // 之后每攒够一张，循环会自己叫醒你，不用你再调。
-        const lp = ensureLoop(ownerAtStart);
+        // **拿到图后确保监护在跑** —— 帧继续攒进环形缓冲，模型之后自己 peek。
+        // （主动看改造：循环只监护不叫人，watch 是"取一张"，取完帧继续攒。）
+        const lp = ensureLoop();
+        const sb = runner.status();
         return await attachAndReturn(ctx, r.sheet, {
           waited: r.waited, partial: r.partial, quality: r.quality,
           userText: r.userText ?? null,
-          looping: Boolean(lp) && !lp.stopped(),
-          loopWakes: lp ? lp.state().wakes : 0,
+          buffered: sb.bufferedNew ?? null,
         });
       }
 
       if (action === 'peek') {
         const s = runner.peek();
         const st = runner.status();
-        // **静默档不主动唤醒**（规格 §四）：常驻采集在跑，但循环不起 ——
-        // 模型想看就自己 peek，图在队列里等着。
-        const silentMode = currentMode === 'silent';
-        // 走 peek 路线的会话也要有循环：不然模型摘完这一张就结束，没人再叫它。
-        // **但采集都停了就别起** —— 起一个下一拍就自杀的钟只是噪音。
-        const lp = silentMode ? null : ((s || st.running || st.pending) ? ensureLoop() : null);
+        // 主动看改造：peek 永不消费帧（拉取层保证）；有采集就确保监护在跑。
+        if (st.running) ensureLoop();
         if (!s) {
           return {
             text: '手上还没有画面（刚开或刚发完，下一张还在攒）。\n'
-              + (silentMode
-                ? '静默档不主动叫你 —— 攒着的图等你 peek。要看此刻可以调 `vision({action:"peek"})`。'
-                : `循环${!lp || lp.stopped() ? '没在跑' : '在跑'} —— 攒够我会叫你；要看此刻可以调 \`vision({action:"peek"})\`。`),
-            meta: { ok: false, reason: 'no-sheet', loop: lp?.state() ?? null, mode: currentMode },
+              + `缓冲 ${st.mbUsed ?? 0}MB/${st.mbMax ?? 48}MB，新帧 ${st.bufferedNew ?? 0} 张 —— 我在自己的回合里主动看，循环不会叫人。`,
+            meta: { ok: false, reason: 'no-sheet', mode: currentMode, bufferedNew: st.bufferedNew ?? 0 },
           };
         }
-        return await attachAndReturn(ctx, s, { looping: Boolean(lp) && !lp.stopped() });
+        return await attachAndReturn(ctx, s, {
+          bufferedNew: st.bufferedNew ?? 0,
+          bufferedMb: st.mbUsed ?? null,
+        });
       }
 
       if (action === 'start') {
@@ -559,22 +541,19 @@ async function registerAll(ctx) {
             ? `在看 ${s.source?.kind} @${s.size?.[0]}×${s.size?.[1]}（${s.quality}，${s.since}s，收到 ${s.frames} 帧，留帧 ${s.stats?.kept ?? 0}，出图 ${s.stats?.sheets ?? 0}）`
               + `${s.lastError ? `\n⚠ ${s.lastError}` : ''}`
             : `没在采集（${s.idleSec}s 前停的）${s.lastError ? `\n⚠ ${s.lastError}` : ''}`)
-            // 循环状态单独一行：**"模型答一句就停"时第一个要看的就是它**
-            + `\n循环：${lp && !lp.stopped
-              ? `在跑（叫醒 ${lp.wakes} 次${lp.wakeFailures ? `，失败 ${lp.wakeFailures} 次` : ''}`
-                + `${lp.lastWakeAt ? `，上一次 ${Math.round((Date.now() - lp.lastWakeAt) / 1000)}s 前${lp.lastWakeOk === false ? '（失败）' : ''}` : ''}`
-                + `，会话 ${lp.session ?? '未知'}）`
-              : lp?.reason ? `已停（${lp.reason}）` : '没起（还没调过 watch）'}`
-            // 手上有没有攒着没取走的图 —— `pending` 一直是 1 时模型不会收到新图，只会一直被叫
-            + `\n队列：${s.pull
-              ? (s.buffered?.count ? `缓冲 ${s.buffered.count} 帧 / ${s.buffered.mb}MB（上限 ${s.buffered.mbMax}MB）` : '缓冲空（等画面变化）')
+            // 循环=纯采集监护（主动看改造）：只攒帧+喂决策器，零投递
+            + `\n监护：${lp && !lp.stopped
+              ? `在跑（${lp.ticks} 拍，攒帧不叫人）`
+              : lp?.reason ? `已停（${lp.reason}）` : '没起'}`
+            // 新帧计数：模型回合里看 bufferedNew>0 就 peek，不看也不会被催
+            + `\n缓冲：${s.pull
+              ? `${s.bufferedNew ?? 0} 帧新 / 共 ${s.buffered?.count ?? 0} 帧 / ${s.buffered?.mb ?? 0}MB（上限 ${s.buffered?.mbMax ?? 48}MB）`
               : (s.pending ? `有 ${s.pending} 张没取走（出图序号 ${s.sheets}）` : '空')}`
             + `\n隐私：黑名单 ${privacy.size} 词条（本地匹配 · 零留痕）`
             // 模式：逐帧时一张图只有一帧、铺满；常规是多帧拼格
             + `\n模式：${sceneMode ? '逐帧（一张图 = 一个场景，铺满）' : '常规（多帧拼一张）'}`
             + ` · 节奏：${sceneMode ? 'dense（跟逐帧走）' : paceMode}`
-            + `（切点门槛 ${(sceneMode ? PACES.dense : PACES[paceMode]).cutAbs}，`
-            + `最多 ${sceneMode ? 4 : PACES[paceMode].wakeGapSec} 秒叫一次）`
+            + `（切点门槛 ${(sceneMode ? PACES.dense : PACES[paceMode]).cutAbs}）`
             // 档位单独一行：胶囊/模型侧改参后**实际生效的是哪一档**，以这里为准
             + `\n档位：${MODES[currentMode]?.label ?? `自定义（scene=${sceneMode ? '开' : '关'} · pace=${paceMode}）`}`,
           meta: { ...s, mode: currentMode, loop: lp },

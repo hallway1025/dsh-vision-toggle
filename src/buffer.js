@@ -59,6 +59,15 @@ export function createBuffer({ maxBytes = DEFAULT_MAX_BYTES } = {}) {
       return result;
     },
 
+    /** 时间戳晚于 ts 的帧数（主动看改造：status.bufferedNew 用，模型回合里查"有没有新画面"）。 */
+    countSince(ts) {
+      let n = 0;
+      for (let i = frames.length - 1; i >= 0; i--) {
+        if (frames[i].t > ts) n += 1; else break;   // 尾部时间单调，从尾往头数到第一个不新的就停
+      }
+      return n;
+    },
+
     /** 清空（off 档语义：采集停 + 缓冲清 + peek 返 102）。 */
     clear() {
       frames = [];

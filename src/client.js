@@ -28,9 +28,9 @@ window.__ModuleLoader__.load({
     ]
     const TITLES = {
       off: '视觉关：采集停止，peek 报 102',
-      silent: '静默：常驻采集不主动唤醒，仅模型 peek 时出图（floor 帧底价）',
+      silent: '静默：常驻采集攒帧不叫人，模型主动 peek（floor 帧底价）',
       dynamic: '动态：自动升降清晰度 + 节奏适配（按屏幕活动计费）',
-      ultra: '原画：满幅单帧，每张约 872 token（最贵一档，逐帧唤醒）',
+      ultra: '原画：满幅单帧，每张约 872 token（最贵一档，推送不进缓冲）',
       auto: '自动：拉取模式 + 静止 5 分钟自动降费、15 分钟建议关闭（决策器纯本地）',
     }
     const API = '/api/vision-toggle'

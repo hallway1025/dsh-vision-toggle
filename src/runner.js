@@ -536,8 +536,9 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
         // 拉取模式状态（B3/R20）：buffer 在跑=pull 档位；buffered 给计数与字节占用
         pull: Boolean(buffer),
         buffered: buffer ? { count: buffer.count, mb: +buffer.mbUsed.toFixed(1), mbMax: buffer.mbMax } : null,
-        // 出图序号（单调递增）：常驻循环靠它保证"同一张图只叫醒一次"。
-        // `pending` 只说明"队列里有"，不说明"是不是新的一张"—— 模型不取的话它一直是 1。
+        // 主动看改造：自上次 peek/watch 后进缓冲的新帧数 —— 模型回合里查这个决定看不看。
+        bufferedNew: buffer ? buffer.countSince(lastPeekedT) : 0,
+        // 出图序号（单调递增，推送档 legacy；拉取档没有"叫醒"概念，仅作状态参考）。
         sheets: pipeline?.stats?.sheets ?? 0,
         // 本批第一帧到现在多久：唤醒文案里要说"攒了多久"，不然模型不知道这段时间有多长
         secondsSinceWake: pipeline?.secondsSinceWake ?? null,
