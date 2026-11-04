@@ -176,6 +176,7 @@ window.__ModuleLoader__.load({
           })
           const j = await r.json()
           if (!r.ok) throw new Error(j?.error || 'HTTP ' + r.status)
+          if (j.delivered === 'cancelled') return // 编辑器里取消了，无动作
           if (j.delivered === 'pasted') {
             setHint('截图已贴到输入框'); setTimeout(() => setHint(null), 2600)
             return

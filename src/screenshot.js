@@ -77,20 +77,25 @@ export async function grabFullScreen(ffmpegPath) {
   }
 }
 
-// ── Electron A 路：写剪贴板 + 对聊天窗口模拟粘贴 ──
-async function deliverViaElectron(pngBuf) {
-  // 宿主动态加载的 ESM 插件：先试内建 import，再退 createRequire
+// ── Electron 可达性（A 路前提）：先试内建 import，再退 createRequire ──
+export async function getElectron() {
   let electron = null;
   try { electron = await import('electron'); } catch { /* 下一路 */ }
   if (!electron) {
     try {
       const { createRequire } = await import('node:module');
       electron = createRequire(import.meta.url)('electron');
-    } catch { return { delivered: 'unavailable' }; }
+    } catch { return null; }
   }
   const mod = electron?.default ?? electron;
+  return (mod && mod.clipboard && mod.nativeImage) ? mod : null;
+}
+
+// ── Electron A 路：写剪贴板 + 对聊天窗口模拟粘贴 ──
+async function deliverViaElectron(pngBuf, electron) {
+  const mod = electron ?? (await getElectron());
+  if (!mod) return { delivered: 'unavailable' };
   const { clipboard, nativeImage } = mod;
-  if (!clipboard || !nativeImage) return { delivered: 'unavailable' };
   const img = nativeImage.createFromBuffer(pngBuf);
   if (img.isEmpty()) return { delivered: 'unavailable' };
   clipboard.writeImage(img);
@@ -113,7 +118,15 @@ async function deliverViaElectron(pngBuf) {
  * 一条龙：隐藏宿主窗 → gdigrab 抓屏 → Electron 写剪贴板+粘贴 → 恢复宿主窗。
  * hide=false 时跳过隐藏/恢复（抓到画面里会有 DSH 自己）。
  */
-export async function screenshotFlow({ ffmpegPath, hide = true }) {
+export async function screenshotFlow({ ffmpegPath, hide = true, edit = false, electron = null }) {
+  // 编辑流程（0.6.0）：编辑器自己管 隐藏-抓屏-恢复 + ✗ 重截，这里只管结果投递
+  if (edit) {
+    const { editShotFlow } = await import('./editor.js');
+    const r = await editShotFlow({ ffmpegPath, electron });
+    if (r.cancelled || !r.png) return { png: null, cancelled: true, hidden: 'skipped' };
+    const delivered = await deliverViaElectron(r.png, electron);
+    return { png: r.png, delivered, hidden: 'ok' };
+  }
   const pid = process.pid; // 插件 server 跑在宿主 main 进程内
   let hidden = 'skipped';
   if (hide) {
@@ -129,6 +142,6 @@ export async function screenshotFlow({ ffmpegPath, hide = true }) {
       await setHostWindow(pid, 9); // 无条件恢复
     }
   }
-  const delivered = await deliverViaElectron(png);
+  const delivered = await deliverViaElectron(png, electron);
   return { png, delivered, hidden };
 }
