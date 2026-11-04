@@ -88,6 +88,15 @@ window.__ModuleLoader__.load({
       const confirmResolve = useRef(null)
       const modeRef = useRef(mode)
       modeRef.current = mode
+      // 2 键改版（m08294）：挡位键 + 截图键；挡位键点开滑块面板
+      const [open, setOpen] = useState(false)
+      const boxRef = useRef(null)
+      useEffect(() => {
+        if (!open) return
+        const away = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
+        document.addEventListener('mousedown', away)
+        return () => document.removeEventListener('mousedown', away)
+      }, [open])
 
       const askConfirm = (text) => new Promise((resolve) => {
         confirmResolve.current = resolve
@@ -171,19 +180,57 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
-      return h('div', { style: rowStyle },
-        MODES.map((m) => h('button', {
-          key: m.id,
-          title: TITLES[m.id],
-          onClick: () => pick(m.id),
-          disabled: busy,
-          style: btnStyle(m.id === mode),
-        }, m.label)),
+      // —— 2 键 + 滑块换挡（m08294：截图一键 + 挡位一键，点开滑块选档）——
+      const ITEM_H = 28
+      const curIdx = Math.max(0, MODES.findIndex((m) => m.id === mode))
+      const curLabel = MODES[curIdx]?.label ?? String(mode)
+      const anchorStyle = { ...rowStyle, position: 'relative' }
+      const panelStyle = {
+        position: 'absolute', bottom: 'calc(100% + 8px)', left: 0,
+        minWidth: '104px', padding: '4px',
+        background: 'var(--dsh-bg-color, #fff)',
+        border: '1px solid var(--dsh-border-color, rgba(127,127,127,0.35))',
+        borderRadius: '10px', boxShadow: '0 6px 20px rgba(0,0,0,0.16)',
+        zIndex: 999,
+      }
+      const thumbStyle = {
+        position: 'absolute', top: '4px', left: '4px',
+        width: 'calc(100% - 8px)', height: ITEM_H + 'px', borderRadius: '6px',
+        background: 'var(--dsh-primary-color, #4f7cff)', opacity: 0.14,
+        transform: 'translateY(' + curIdx * ITEM_H + 'px)',
+        transition: 'transform .22s cubic-bezier(.4, 0, .2, 1)',
+      }
+      const itemStyle = (active) => ({
+        display: 'block', width: '100%', textAlign: 'left',
+        fontSize: '12px', height: ITEM_H + 'px', lineHeight: ITEM_H + 'px',
+        padding: '0 10px', borderRadius: '6px', cursor: 'pointer', border: 'none',
+        background: 'transparent',
+        color: active ? 'var(--dsh-primary-color, #2563eb)' : 'inherit',
+        fontWeight: active ? 600 : 400,
+      })
+      return h('div', { ref: boxRef, style: anchorStyle },
         h('button', {
           title: '截图：绕过档位临时抓一帧（仅关/静默档可用）',
           onClick: snap, disabled: busy,
           style: btnStyle(false),
         }, '📷'),
+        h('button', {
+          title: '视觉挡位：' + (TITLES[mode] ?? ''),
+          onClick: () => setOpen(!open), disabled: busy,
+          style: { ...btnStyle(false), minWidth: '52px' },
+        }, curLabel + (open ? ' ▾' : ' ▴')),
+        open ? h('div', { style: panelStyle, role: 'listbox' },
+          h('div', { style: { position: 'relative' } },
+            h('div', { style: thumbStyle }),
+            MODES.map((m) => h('button', {
+              key: m.id,
+              title: TITLES[m.id],
+              onClick: () => { setOpen(false); pick(m.id) },
+              disabled: busy,
+              style: itemStyle(m.id === mode),
+            }, m.label)),
+          ),
+        ) : null,
         err ? h('span', { title: err, style: { fontSize: '11px', color: '#e05252', marginLeft: '2px' } }, '⚠') : null,
         confirmText ? h('div', { style: overlayStyle },
           h('div', { style: dialogStyle },
@@ -199,10 +246,10 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       // 槽位缺失 / 宿主形态变化 → 优雅降级为不渲染（R-宽容策略第 3 层）
-      ctx.slots.inject('conversation.input.model', () => {
+      ctx.slots.inject('conversation.input.left', () => {
         try {
           const unregister = ctx.slots.register({
-            name: 'conversation.input.model',
+            name: 'conversation.input.left',
             id: 'vision-toggle-capsule',
             order: 15,
           }, Capsule)
