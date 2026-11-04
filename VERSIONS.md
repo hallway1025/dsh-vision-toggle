@@ -10,7 +10,7 @@
 | 插件版本 | 0.3.0（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
 | 发布包 | dsh-vision-toggle-0.3.0-六档版-<短哈希>.zip —— **包名带 git 短哈希，对哈希即对代次** |
 | 本版提交 | 见包内 .git 无——用 zip 文件名里的短哈希对照 fork git log；本轮=fa8c3e1 之后的下一提交 |
-| 形式规格 | **v4.4 六档重定义版**（不在包内；路径 memory/vision/vision_modes_spec.md，仓库 回音/memory/） |
+| 形式规格 | **v4.4 六档重定义版**（不在包内；`vision_modes_spec.md` 与源码同仓维护，位于 fork 所在仓库的 `memory/vision/` 目录） |
 | 上游 | dsh-see-now 0.0.7（Apache-2.0，LICENSE/NOTICE 原样保留） |
 | 档位 | 六档：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra / custom；拉取档 wakeGapSec=∞ 零投递 |
 | 默认档 | off（DEFAULT_MODE，进程重启必回 off） |

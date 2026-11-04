@@ -29,6 +29,15 @@ DSH 视觉插件（`dsh-see-now` 0.0.7 的 fork，Apache-2.0，LICENSE/NOTICE �
 
 同屏只启用一个。两个插件的工具名/路由/槽位完全独立，但都会拉 ffmpeg 采集——同时开会双份开销。安装本插件后建议停用 `dsh-see-now`。
 
+## 安装
+
+前置：DSH 宿主 + Node ≥ 20（插件内建 ffmpeg 解析顺序见 `src/binaries.js`：环境变量 → `~/.dsh/tools/ffmpeg` → `~/.dsh/bin/ffmpeg` → PATH）。
+
+1. 在 DSH 会话中调用插件管理：`install_bundle`，目标指向本 zip 或解包后的目录；
+2. 安装后在「设置 → 插件」确认 `dsh-vision-toggle` 已启用，对话页输入区出现挡位胶囊即成功；
+3. 卸载：设置 → 插件 → 移除；或直接删除 `~/.dsh/profiles/<profile>/node_modules/dsh-vision-toggle` 并重启宿主。
+4. 与 `dsh-see-now` 互斥：同屏只启用一个（见上节）。
+
 ## 开发
 
 ```bash
