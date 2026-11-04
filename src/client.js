@@ -18,6 +18,13 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const React = require('react')
     const { createElement: h, useState, useEffect, useRef } = React
+    // 编辑层 portal 到 body：插件 slot 容器的祖先链可能带 stacking context（transform/contain 等），
+    // fixed+zIndex 顶格也盖不过宿主自绘标题栏 → 误点 DSH 的 ✕ 关窗（m10003）。
+    // L-247 禁的是命令式孤儿层；portal 由 React 管理，卸载即摘除，不违背。
+    let createPortal = null
+    try { createPortal = require('react-dom').createPortal } catch {}
+    if (!createPortal) createPortal = React.createPortal || null
+    const asOverlay = (el) => (createPortal ? createPortal(el, document.body) : el)
 
     const MODES = [
       { id: 'off', label: 'off' },
@@ -383,8 +390,8 @@ window.__ModuleLoader__.load({
       }, label)
 
       if (!ready) {
-        return h('div', { style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-          h('div', { style: { color: '#99a', fontSize: '13px' } }, '截图加载中…'))
+        return asOverlay(h('div', { style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+          h('div', { style: { color: '#99a', fontSize: '13px' } }, '截图加载中…')))
       }
       const img = imgRef.current
       const liveSel = dragRef.current ?? sel
@@ -402,7 +409,7 @@ window.__ModuleLoader__.load({
         ? { maxWidth: '94vw', maxHeight: '76vh', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
         : { width: Math.round(cvsW * zoom) + 'px', height: Math.round(cvsH * zoom) + 'px', maxWidth: 'none', maxHeight: 'none', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
       const zoomLabel = zoom == null ? '适合' : Math.round(zoom * 100) + '%'
-      return h('div', {
+      return asOverlay(h('div', {
         style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
         onContextMenu: (e) => e.preventDefault(),
         onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③
@@ -462,7 +469,7 @@ window.__ModuleLoader__.load({
         // 底部提示
         h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } },
           phase === 'crop' ? 'Esc 关闭' : '标注后 ✓ 贴进聊天框 · 滚轮缩放 · Space/中键拖动平移 · Esc 关闭'),
-      )
+      ))
     }
 
     function Capsule() {
