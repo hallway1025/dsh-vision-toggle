@@ -117,8 +117,7 @@ window.__ModuleLoader__.load({
     function ShotEditor({ png, onClose, onDone }) {
       const cvRef = useRef(null)
       const stRef = useRef({ ops: [], redo: [], base: null, cache: null, drawing: null })
-      const [phase, setPhase] = useState('crop')   // crop=框选区 → edit=标注
-      // 全屏隐藏 DSH 原生窗口键（WCO titleBarOverlay 是 OS 层，网页盖不住；全屏时系统自动摘掉）
+            // 全屏隐藏 DSH 原生窗口键（WCO titleBarOverlay 是 OS 层，网页盖不住；全屏时系统自动摘掉）
       const [fsOK, setFsOK] = useState(false)
       useEffect(() => {
         let alive = true
@@ -142,7 +141,6 @@ window.__ModuleLoader__.load({
       const st = stRef.current
       const imgRef = useRef(null)
       const selRef = useRef(null); selRef.current = sel
-      const phaseRef = useRef(phase); phaseRef.current = phase
       // 0.7.0：工具状态 ref 直读（消灭闭包陈旧）+ 缩放/平移
       const toolRef = useRef('rect'); const colorRef = useRef('#ff3b30'); const widthRef = useRef(4)
       const [width, setWidth] = useState(4)
@@ -157,7 +155,7 @@ window.__ModuleLoader__.load({
       // 原图加载；png 变化（重截）自动回 crop
       useEffect(() => {
         const img = new Image()
-        img.onload = () => { imgRef.current = img; setPhase('crop'); setSel(null); dragRef.current = null; setReady(true) }
+        img.onload = () => { imgRef.current = img; setSel(null); dragRef.current = null; setReady(true) }
         img.onerror = () => onClose()
         img.src = 'data:image/png;base64,' + png
       }, [png])
@@ -167,9 +165,8 @@ window.__ModuleLoader__.load({
       // watchdog 180s 硬关（保底闸②）；React 卸载必然 cleanup
       useEffect(() => {
         const key = (e) => {
-          const ph = phaseRef.current
           const tag = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)
-          if (ph === 'edit' && e.code === 'Space' && !tag) {
+          if (e.code === 'Space' && !tag) {
             e.preventDefault()
             if (!spaceRef.current) { spaceRef.current = true; setSpace(true) }
             return
@@ -177,14 +174,12 @@ window.__ModuleLoader__.load({
           if (tag) return
           if (e.key === 'Escape') {
             e.stopPropagation()
-            if (ph === 'edit' && txtRef.current) { txtValRef.current = ''; setTxtVal(''); setTxt(null); return }
-            if (ph === 'crop' && selRef.current) { setSel(null); dragRef.current = null }
+            if (txtRef.current) { txtValRef.current = ''; setTxtVal(''); setTxt(null); return }
+            if (toolRef.current === 'crop') { toolRef.current = 'rect'; setTool('rect'); setSel(null); dragRef.current = null }
             else onClose()
-          } else if (e.key === 'Enter' && ph === 'crop') {
-            e.preventDefault(); confirmCrop()
-          } else if (ph === 'edit' && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+          } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
             e.preventDefault(); undo()
-          } else if (ph === 'edit' && (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+          } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
             e.preventDefault(); redoOp()
           }
         }
@@ -283,23 +278,23 @@ window.__ModuleLoader__.load({
             return
           }
           if (!dragRef.current && !st.drawing) return
-          if (phaseRef.current === 'crop' && dragRef.current) {
+          if (toolRef.current === 'crop' && dragRef.current) {
             const p = toImgCrop(e)
             dragRef.current = { ...dragRef.current, x2: p.x, y2: p.y }
             setDragTick((t) => t + 1)
-          } else if (phaseRef.current === 'edit' && st.drawing) {
+          } else if (toolRef.current !== 'crop' && st.drawing) {
             const p = toImg(e); st.drawing.x2 = p.x; st.drawing.y2 = p.y; redraw(st.drawing)
           }
         }
         const up = () => {
           if (panRef.current) { panRef.current = null; return }
-          if (phaseRef.current === 'crop' && dragRef.current) {
+          if (toolRef.current === 'crop' && dragRef.current) {
             const r = dragRef.current; dragRef.current = null
             if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) { setSel(r); confirmRect(r) }
             else setDragTick((t) => t + 1)
             return
           }
-          if (phaseRef.current === 'edit' && st.drawing) {
+          if (toolRef.current !== 'crop' && st.drawing) {
             const d = st.drawing; st.drawing = null
             const tiny = Math.abs(d.x2 - d.x) < 3 && Math.abs(d.y2 - d.y) < 3 && d.t !== 'mos'
             if (!tiny) { st.ops.push(d); st.redo = []; redrawStatic() }
@@ -312,11 +307,10 @@ window.__ModuleLoader__.load({
 
       // ---- crop 阶段 ----
       const toImgCrop = (e) => {
-        const im = cropImgRef.current; if (!im || !imgRef.current) return { x: 0, y: 0 }
-        const r = im.getBoundingClientRect()
-        return { x: (e.clientX - r.left) * imgRef.current.naturalWidth / r.width, y: (e.clientY - r.top) * imgRef.current.naturalHeight / r.height }
+        const cv = cvRef.current; if (!cv || !st.base) return { x: 0, y: 0 }
+        const r = cv.getBoundingClientRect()
+        return { x: (e.clientX - r.left) * st.base.width / r.width, y: (e.clientY - r.top) * st.base.height / r.height }
       }
-      const cropImgRef = useRef(null)
       const cropStart = (e) => {
         if (e.button !== 0) return
         e.preventDefault()
@@ -325,9 +319,9 @@ window.__ModuleLoader__.load({
         setSel(null)
       }
       function confirmRect(r) {
-        const img = imgRef.current
-        if (!img) return
-        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight
+        const b = st.base
+        if (!b) return
+        let sx = 0, sy = 0, sw = b.width, sh = b.height
         if (r) {
           sx = Math.max(0, Math.min(r.x, r.x2)); sy = Math.max(0, Math.min(r.y, r.y2))
           sw = Math.abs(r.x2 - r.x); sh = Math.abs(r.y2 - r.y)
@@ -335,20 +329,21 @@ window.__ModuleLoader__.load({
         }
         const c = document.createElement('canvas')
         c.width = sw; c.height = sh
-        c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        c.getContext('2d').drawImage(b, sx, sy, sw, sh, 0, 0, sw, sh)
         st.base = c; st.ops = []; st.redo = []; st.cache = null
-        setSel(null); setPhase('edit')
+        setSel(null)
+        zoomRef.current = null; setZoom(null)
+        toolRef.current = 'rect'; setTool('rect')
+        const cv = cvRef.current
+        if (cv) { cv.width = sw; cv.height = sh }
+        redrawStatic(); redraw()
       }
-      function confirmCrop(forceFull) {
-        confirmRect(forceFull ? null : selRef.current)
-      }
-      // edit 阶段画布初始化（base=裁剪后 canvas）
+      // edit 阶段画布初始化（base=整图；裁剪=工具，见 confirmRect）
       useEffect(() => {
-        if (phase !== 'edit') return
         const cv = cvRef.current; if (!cv || !st.base) return
         cv.width = st.base.width; cv.height = st.base.height
         redrawStatic(); redraw()
-      }, [phase])
+      }, [ready])
 
       // ---- edit 阶段交互 ----
       const start = (e) => {
@@ -359,6 +354,7 @@ window.__ModuleLoader__.load({
           return
         }
         if (e.button !== 0) return
+        if (toolRef.current === 'crop') { const p = toImgCrop(e); dragRef.current = { x: p.x, y: p.y, x2: p.x, y2: p.y }; setSel(null); return }
         if (toolRef.current === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
         const p = toImg(e)
         st.drawing = { t: toolRef.current, c: colorRef.current, w: widthRef.current, x: p.x, y: p.y, x2: p.x, y2: p.y }
@@ -409,10 +405,10 @@ window.__ModuleLoader__.load({
       const liveSel = dragRef.current ?? sel
       txtRef.current = !!txt
       const box = (r) => ({
-        left: (Math.min(r.x, r.x2) / img.naturalWidth * 100) + '%',
-        top: (Math.min(r.y, r.y2) / img.naturalHeight * 100) + '%',
-        width: (Math.abs(r.x2 - r.x) / img.naturalWidth * 100) + '%',
-        height: (Math.abs(r.y2 - r.y) / img.naturalHeight * 100) + '%',
+        left: (Math.min(r.x, r.x2) / cvsW * 100) + '%',
+        top: (Math.min(r.y, r.y2) / cvsH * 100) + '%',
+        width: (Math.abs(r.x2 - r.x) / cvsW * 100) + '%',
+        height: (Math.abs(r.y2 - r.y) / cvsH * 100) + '%',
       })
       // 缩放渲染：null=适合（max 约束）；数字=显式宽高
       const cvsW = st.base ? st.base.width : 0
@@ -428,26 +424,19 @@ window.__ModuleLoader__.load({
       },
         h('style', null, VTS_CSS),
         h('button', { type: 'button', title: '退出截图（不贴图）', onClick: onClose, style: { position: 'absolute', top: (fsOK ? '12px' : '48px'), right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer', zIndex: 3 } }, '✕'),
-        // 主体（上图下条，QQ 同款：工具条贴图下方）
-        phase === 'crop'
-          ? h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
-              h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
-                h('img', { ref: cropImgRef, src: 'data:image/png;base64,' + png, draggable: false, onMouseDown: cropStart, style: { display: 'block', maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', userSelect: 'none' } }),
-                liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
-                  h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
-                    Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
-                ) : null,
-              ),
-              h('div', { className: 'vts-bar' },
-                h('button', { type: 'button', title: '全屏（不框选直接标注）', onClick: () => confirmCrop(true), className: 'vts-btn', style: { background: '#2ea44f', width: 'auto', padding: '0 12px', fontSize: '13px', lineHeight: '34px' } }, '全屏'),
-              ),
-            )
-          : h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
+        // 主体（上图下条，QQ 同款：工具条贴图下方）；框选不再是独立阶段，裁剪=工具条上的 ⛶ 工具
+        h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
               h('div', { ref: wrapRef, style: { overflow: 'auto', maxWidth: '94vw', maxHeight: '76vh', lineHeight: 0 } },
-                h('canvas', { ref: cvRef, onMouseDown: start, style: cvsStyle }),
+                h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
+                  h('canvas', { ref: cvRef, onMouseDown: start, style: cvsStyle }),
+                  liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
+                    h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
+                      Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
+                  ) : null,
+                ),
               ),
               h('div', { className: 'vts-bar' },
-                toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
+                toolBtn('crop', '⛶', '裁剪：拖选区域，松手裁剪（Esc 退出裁剪）'), toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
                 sep('s1'),
                 VTS_COLORS.map((c) => colorBtn(c)),
                 sep('s2'),
@@ -459,7 +448,6 @@ window.__ModuleLoader__.load({
                 h('button', { key: 'z100', type: 'button', title: '原始大小 1:1', className: 'vts-txt' + (zoom === 1 ? ' vts-on' : ''), onClick: () => { zoomRef.current = 1; setZoom(1) } }, '1:1'),
                 h('span', { key: 'zl', style: { color: 'rgba(255,255,255,.6)', fontSize: '12px', minWidth: '44px', textAlign: 'center' } }, zoomLabel),
                 sep('s5'),
-                barBtn('↺', '重新框选（回到选区）', () => { zoomRef.current = null; setZoom(null); setPhase('crop'); setSel(null) }),
                 barBtn('✓', '完成，贴进聊天框', finish, '#2ea44f'),
               ),
             ),
