@@ -80,43 +80,57 @@ window.__ModuleLoader__.load({
       transition: 'opacity .12s, background .12s',
     })
 
-    // ── 截图编辑层（React 版，2026-11-05 重写）──
-    // 旧版 document.body 命令式孤儿层锁死 UI（m09567 事故：✗/✓ 无响应只能重启宿主）。
-    // 新版：React 条件渲染（卸载即消失，无孤儿层）+ 四道保底闸：
-    //   ①Esc capture 关闭 ②150s watchdog 硬关 ③点容器空白关闭 ④图片加载失败自动关。
-    // canvas 走 replaced element max 约束自适应视口（保比例）；鼠标坐标经
-    // getBoundingClientRect 实测映射（修正截图分辨率≠视口的拉伸错位）。
+    // ── 截图编辑层（React 版 v2，0.6.2）──
+    // v1（b2dd58e）修孤儿层锁死（m09567）：React 条件渲染 + 四道保底闸（Esc/watchdog/点空白/加载失败）。
+    // v2（m09618 主人反馈）：
+    //   ①crop 阶段：先拖框选区再标注（微信式）；Enter=全屏；选区亮窗+四周暗化+尺寸标签。
+    //   ②性能：底图+已定笔预渲染进离屏 cache 层，拖动帧只做 2 次 drawImage（生涩主因=全画布逐帧重绘）。
+    //   ③重截 png 更新自动回 crop 阶段。
     function ShotEditor({ png, onClose, onDone, onResnap }) {
       const cvRef = useRef(null)
-      const stRef = useRef({ ops: [], redo: [], base: null, drawing: null })
+      const stRef = useRef({ ops: [], redo: [], base: null, cache: null, drawing: null })
+      const [phase, setPhase] = useState('crop')   // crop=框选区 → edit=标注
       const [tool, setTool] = useState('rect')
       const [color, setColor] = useState('#ff3b30')
-      const [txt, setTxt] = useState(null) // {cx,cy,px,py} 文字输入框位置（屏幕+图像坐标）
+      const [sel, setSel] = useState(null)         // 已定选区（图像坐标）
+      const dragRef = useRef(null)
+      const [dragTick, setDragTick] = useState(0)  // 拖动帧重渲染信号
+      const [txt, setTxt] = useState(null)
       const [txtVal, setTxtVal] = useState('')
       const txtValRef = useRef('')
       const [ready, setReady] = useState(false)
       const st = stRef.current
+      const imgRef = useRef(null)
+      const selRef = useRef(null); selRef.current = sel
+      const phaseRef = useRef(phase); phaseRef.current = phase
 
-      // 图片加载：成功铺底；失败自动关（保底闸④）
+      // 原图加载；png 变化（重截）自动回 crop
       useEffect(() => {
         const img = new Image()
-        img.onload = () => {
-          const cv = cvRef.current
-          if (!cv) return
-          cv.width = img.naturalWidth; cv.height = img.naturalHeight
-          st.base = img
-          setReady(true)
-          redraw()
-        }
+        img.onload = () => { imgRef.current = img; setPhase('crop'); setSel(null); dragRef.current = null; setReady(true) }
         img.onerror = () => onClose()
         img.src = 'data:image/png;base64,' + png
       }, [png])
 
-      // Esc（capture，保底闸①）+ 150s watchdog（保底闸②）；React 卸载必然 cleanup
+      // Esc 分层：crop+有选区=清选区 / 其他=关；Enter(crop)=确认选区（无选区=全屏）；
+      // Ctrl+Z/Y(edit)=撤销重做；watchdog 180s 硬关（保底闸②）；React 卸载必然 cleanup
       useEffect(() => {
-        const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+        const key = (e) => {
+          const ph = phaseRef.current
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            if (ph === 'crop' && selRef.current) { setSel(null); dragRef.current = null }
+            else onClose()
+          } else if (e.key === 'Enter' && ph === 'crop') {
+            e.preventDefault(); confirmCrop()
+          } else if (ph === 'edit' && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+            e.preventDefault(); undo()
+          } else if (ph === 'edit' && (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+            e.preventDefault(); redoOp()
+          }
+        }
         window.addEventListener('keydown', key, true)
-        const guard = setTimeout(() => { try { onClose() } catch {} }, 150000)
+        const guard = setTimeout(() => { try { onClose() } catch {} }, 180000)
         return () => { window.removeEventListener('keydown', key, true); clearTimeout(guard) }
       }, [])
 
@@ -146,45 +160,112 @@ window.__ModuleLoader__.load({
           g.imageSmoothingEnabled = true
         }
       }
+      // 性能主修复：底图+已定笔 → 离屏 cache 层（只随 ops 变化重画）
+      function redrawStatic() {
+        const cv = cvRef.current; if (!cv) return
+        if (!st.cache || st.cache.width !== cv.width || st.cache.height !== cv.height) {
+          st.cache = document.createElement('canvas')
+          st.cache.width = cv.width; st.cache.height = cv.height
+        }
+        const g = st.cache.getContext('2d')
+        g.clearRect(0, 0, st.cache.width, st.cache.height)
+        if (st.base) g.drawImage(st.base, 0, 0)
+        for (const op of st.ops) drawOp(g, op)
+      }
+      // 拖动帧：cache 一贴 + 当前笔一画（共 2 次 drawImage 级别，替代全画布重绘）
       function redraw(extra) {
         const cv = cvRef.current; if (!cv) return
         const g = cv.getContext('2d')
         g.clearRect(0, 0, cv.width, cv.height)
-        if (st.base) g.drawImage(st.base, 0, 0)
-        for (const op of st.ops) drawOp(g, op)
+        if (!st.cache) redrawStatic()
+        if (st.cache) g.drawImage(st.cache, 0, 0)
         if (extra) drawOp(g, extra)
       }
       const toImg = (e) => {
         const cv = cvRef.current; const r = cv.getBoundingClientRect()
         return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }
       }
-      // 拖动跟随挂 window（拖出画布不断线）；React 卸载 cleanup，无残留监听
+      // 拖动跟随挂 window（React 卸载 cleanup）
       useEffect(() => {
-        const mv = (e) => { if (!st.drawing) return; const p = toImg(e); st.drawing.x2 = p.x; st.drawing.y2 = p.y; redraw(st.drawing) }
+        const mv = (e) => {
+          if (!dragRef.current && !st.drawing) return
+          if (phaseRef.current === 'crop' && dragRef.current) {
+            const p = toImgCrop(e)
+            dragRef.current = { ...dragRef.current, x2: p.x, y2: p.y }
+            setDragTick((t) => t + 1)
+          } else if (phaseRef.current === 'edit' && st.drawing) {
+            const p = toImg(e); st.drawing.x2 = p.x; st.drawing.y2 = p.y; redraw(st.drawing)
+          }
+        }
         const up = () => {
-          if (!st.drawing) return
-          const d = st.drawing; st.drawing = null
-          const tiny = Math.abs(d.x2 - d.x) < 3 && Math.abs(d.y2 - d.y) < 3 && d.t !== 'mos'
-          if (!tiny) { st.ops.push(d); st.redo = [] }
-          redraw()
+          if (phaseRef.current === 'crop' && dragRef.current) {
+            const r = dragRef.current; dragRef.current = null
+            if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) setSel(r)
+            setDragTick((t) => t + 1)
+            return
+          }
+          if (phaseRef.current === 'edit' && st.drawing) {
+            const d = st.drawing; st.drawing = null
+            const tiny = Math.abs(d.x2 - d.x) < 3 && Math.abs(d.y2 - d.y) < 3 && d.t !== 'mos'
+            if (!tiny) { st.ops.push(d); st.redo = []; redrawStatic() }
+            redraw()
+          }
         }
         window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up)
         return () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
       }, [])
 
+      // ---- crop 阶段 ----
+      const toImgCrop = (e) => {
+        const im = cropImgRef.current; if (!im || !imgRef.current) return { x: 0, y: 0 }
+        const r = im.getBoundingClientRect()
+        return { x: (e.clientX - r.left) * imgRef.current.naturalWidth / r.width, y: (e.clientY - r.top) * imgRef.current.naturalHeight / r.height }
+      }
+      const cropImgRef = useRef(null)
+      const cropStart = (e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        const p = toImgCrop(e)
+        dragRef.current = { x: p.x, y: p.y, x2: p.x, y2: p.y }
+        setSel(null)
+      }
+      function confirmCrop(forceFull) {
+        const img = imgRef.current
+        const r = forceFull ? null : selRef.current
+        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight
+        if (r) {
+          sx = Math.max(0, Math.min(r.x, r.x2)); sy = Math.max(0, Math.min(r.y, r.y2))
+          sw = Math.abs(r.x2 - r.x); sh = Math.abs(r.y2 - r.y)
+          if (sw < 5 || sh < 5) { setSel(null); return }
+        }
+        const c = document.createElement('canvas')
+        c.width = sw; c.height = sh
+        c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        st.base = c; st.ops = []; st.redo = []; st.cache = null
+        setPhase('edit')
+      }
+      // edit 阶段画布初始化（base=裁剪后 canvas）
+      useEffect(() => {
+        if (phase !== 'edit') return
+        const cv = cvRef.current; if (!cv || !st.base) return
+        cv.width = st.base.width; cv.height = st.base.height
+        redrawStatic(); redraw()
+      }, [phase])
+
+      // ---- edit 阶段交互 ----
       const start = (e) => {
         e.preventDefault()
         if (tool === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
         const p = toImg(e)
         st.drawing = { t: tool, c: color, w: 3, x: p.x, y: p.y, x2: p.x, y2: p.y }
       }
-      const undo = () => { const op = st.ops.pop(); if (op) st.redo.push(op); redraw() }
-      const redoOp = () => { const op = st.redo.pop(); if (op) st.ops.push(op); redraw() }
+      const undo = () => { const op = st.ops.pop(); if (op) st.redo.push(op); redrawStatic(); redraw() }
+      const redoOp = () => { const op = st.redo.pop(); if (op) st.ops.push(op); redrawStatic(); redraw() }
       const commitText = () => {
         const v = txtValRef.current
         txtValRef.current = ''
         setTxtVal('')
-        if (txt && v.trim()) { st.ops.push({ t: 'text', c: color, w: 3, x: txt.px, y: txt.py, s: v }); st.redo = [] }
+        if (txt && v.trim()) { st.ops.push({ t: 'text', c: color, w: 3, x: txt.px, y: txt.py, s: v }); st.redo = []; redrawStatic() }
         setTxt(null)
         redraw()
       }
@@ -201,32 +282,61 @@ window.__ModuleLoader__.load({
       }
       const toolBtn = (id, label, title) => h('button', {
         key: id, type: 'button', title, onClick: () => setTool(id),
-        style: { width: '36px', height: '36px', margin: '0 2px', borderRadius: '8px', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '30px', textAlign: 'center', padding: 0, border: tool === id ? '2px solid #4f7cff' : '2px solid transparent' },
+        style: { width: '36px', height: '36px', margin: '0 2px', borderRadius: '8px', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '30px', textAlign: 'center', padding: 0, border: tool === id ? '2px solid #4f7cff' : '2px solid transparent', transition: 'background .12s' },
       }, label)
       const colorBtn = (id, c, title) => h('button', {
         key: id, type: 'button', title, onClick: () => setColor(c),
-        style: { width: '30px', height: '30px', margin: '3px 2px', borderRadius: '50%', background: c, cursor: 'pointer', padding: 0, border: color === c ? '2px solid #fff' : '2px solid transparent' },
+        style: { width: '30px', height: '30px', margin: '3px 2px', borderRadius: '50%', background: c, cursor: 'pointer', padding: 0, border: color === c ? '2px solid #fff' : '2px solid transparent', transition: 'border .12s' },
       })
       const barBtn = (label, title, bg, onClick) => h('button', {
         key: label, type: 'button', title, onClick,
-        style: { width: '36px', height: '36px', margin: '0 2px', border: 'none', borderRadius: '8px', background: bg, color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '36px', textAlign: 'center', padding: 0 },
+        style: { width: '36px', height: '36px', margin: '0 2px', border: 'none', borderRadius: '8px', background: bg, color: '#fff', fontSize: '17px', cursor: 'pointer', lineHeight: '36px', textAlign: 'center', padding: 0, transition: 'background .12s' },
       }, label)
+
+      if (!ready) {
+        return h('div', { style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+          h('div', { style: { color: '#99a', fontSize: '13px' } }, '截图加载中…'))
+      }
+      const img = imgRef.current
+      const liveSel = dragRef.current ?? sel
+      const box = (r) => ({
+        left: (Math.min(r.x, r.x2) / img.naturalWidth * 100) + '%',
+        top: (Math.min(r.y, r.y2) / img.naturalHeight * 100) + '%',
+        width: (Math.abs(r.x2 - r.x) / img.naturalWidth * 100) + '%',
+        height: (Math.abs(r.y2 - r.y) / img.naturalHeight * 100) + '%',
+      })
       return h('div', {
-        style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③：点空白关闭
+        style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
+        onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() }, // 保底闸③
       },
-        h('div', { style: { position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '4px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
-          toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
-          colorBtn('c-red', '#ff3b30', '红色'), colorBtn('c-blue', '#3b82f6', '蓝色'), colorBtn('c-yel', '#f5c518', '黄色'),
-          barBtn('↶', '撤销 (Ctrl+Z)', 'rgba(255,255,255,.12)', undo),
-          barBtn('↷', '重做 (Ctrl+Y)', 'rgba(255,255,255,.12)', redoOp),
-          h('span', { style: { width: '8px' } }),
-          barBtn('✗', '重截（重新抓屏）', '#d29922', onResnap),
-          barBtn('✓', '完成，贴进聊天框', '#2ea44f', finish),
-        ),
-        h('button', { type: 'button', title: '关闭编辑器（不贴图）', onClick: onClose, style: { position: 'absolute', top: '12px', right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer' } }, '✕'),
-        h('canvas', { ref: cvRef, onMouseDown: start, style: { maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000', display: ready ? 'block' : 'none' } }),
-        !ready ? h('div', { style: { color: '#99a', fontSize: '13px' } }, '截图加载中…') : null,
+        // 顶部条：crop 阶段=提示；edit 阶段=工具条
+        phase === 'crop'
+          ? h('div', { style: { position: 'absolute', top: '14px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '8px 14px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
+              h('span', { style: { color: 'rgba(255,255,255,.85)', fontSize: '13px' } }, '拖动框选范围（Enter=全屏）'),
+              h('button', { type: 'button', onClick: () => confirmCrop(true), style: { padding: '4px 12px', borderRadius: '6px', border: 'none', background: '#2ea44f', color: '#fff', fontSize: '12px', cursor: 'pointer' } }, '全屏'),
+            )
+          : h('div', { style: { position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', background: 'rgba(20,20,20,.94)', borderRadius: '12px', padding: '4px', boxShadow: '0 4px 16px rgba(0,0,0,.5)', zIndex: 3 } },
+              toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
+              colorBtn('c-red', '#ff3b30', '红色'), colorBtn('c-blue', '#3b82f6', '蓝色'), colorBtn('c-yel', '#f5c518', '黄色'),
+              barBtn('↶', '撤销 (Ctrl+Z)', 'rgba(255,255,255,.12)', undo),
+              barBtn('↷', '重做 (Ctrl+Y)', 'rgba(255,255,255,.12)', redoOp),
+              h('span', { style: { width: '8px' } }),
+              barBtn('↺', '重新框选（回到选区）', 'rgba(255,255,255,.2)', () => { setPhase('crop'); setSel(null) }),
+              barBtn('✗', '重截（重新抓屏）', '#d29922', onResnap),
+              barBtn('✓', '完成，贴进聊天框', '#2ea44f', finish),
+            ),
+        h('button', { type: 'button', title: '关闭编辑器（不贴图）', onClick: onClose, style: { position: 'absolute', top: '12px', right: '14px', width: '34px', height: '34px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,.14)', color: '#fff', fontSize: '15px', cursor: 'pointer', zIndex: 3 } }, '✕'),
+        // 主体
+        phase === 'crop'
+          ? h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
+              h('img', { ref: cropImgRef, src: 'data:image/png;base64,' + png, draggable: false, onMouseDown: cropStart, style: { display: 'block', maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', userSelect: 'none' } }),
+              liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
+                h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
+                  Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
+              ) : null,
+            )
+          : h('canvas', { ref: cvRef, onMouseDown: start, style: { maxWidth: '94vw', maxHeight: '84vh', cursor: 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' } }),
+        // 文字输入（edit 阶段）
         txt ? h('input', {
           autoFocus: true, value: txtVal,
           onChange: (e) => { txtValRef.current = e.target.value; setTxtVal(e.target.value) },
@@ -238,7 +348,9 @@ window.__ModuleLoader__.load({
           onBlur: commitText,
           style: { position: 'fixed', left: txt.cx + 'px', top: txt.cy + 'px', zIndex: 4, fontSize: '18px', padding: '4px 8px', borderRadius: '6px', border: '2px solid #4f7cff', background: 'rgba(255,255,255,.95)', color: '#111' },
         }) : null,
-        h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } }, '标注后 ✓ 贴进聊天框 · ✗ 重截 · Esc 或点空白关闭'),
+        // 底部提示
+        h('div', { style: { position: 'absolute', bottom: '14px', left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.55)', fontSize: '12px', zIndex: 2 } },
+          phase === 'crop' ? '拖动框选 · Enter=全屏 · Esc 关闭' : '标注后 ✓ 贴进聊天框 · ↺ 重新框选 · Esc 关闭'),
       )
     }
 
