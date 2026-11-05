@@ -650,10 +650,9 @@ window.__ModuleLoader__.load({
       )
       const curIdx = Math.max(0, MODES.findIndex((m) => m.id === mode))
       const curLabel = MODES[curIdx]?.label ?? String(mode)
-      // 自定义=独立挡位（m08539/m08564）：任何档都能切，子面板两组参数（清晰度×节奏）
-      const effQ = qStatus ?? DEFQ[mode] ?? null
-      const qIdx = Math.max(0, QUALITIES.findIndex((q) => q.id === effQ))
-      const thumbIdx = view === 'custom' ? qIdx : curIdx
+      // 自定义=独立挡位（m08539/m08564）：任何档都能切；子面板只留读取速度（m11675 简化：默认/实时）
+      const spIdx = Math.max(0, SPEEDS.findIndex((sp) => sp.id === sSpeed))
+      const thumbIdx = view === 'custom' ? spIdx : curIdx
       const anchorStyle = { ...rowStyle, position: 'relative' }
       const panelStyle = {
         position: 'absolute', bottom: 'calc(100% + 8px)', left: 0,
@@ -665,9 +664,9 @@ window.__ModuleLoader__.load({
       }
       const thumbStyle = {
         position: 'absolute', top: '4px', left: '4px',
-        width: 'calc(100% - 8px)', height: (view === 'custom' ? ITEM_H_Q : ITEM_H) + 'px', borderRadius: '8px',
+        width: 'calc(100% - 8px)', height: ITEM_H + 'px', borderRadius: '8px',
         background: 'var(--dsh-primary-color, #4f7cff)', opacity: 0.14,
-        transform: 'translateY(' + thumbIdx * (view === 'custom' ? ITEM_H_Q : ITEM_H) + 'px)',
+        transform: 'translateY(' + thumbIdx * ITEM_H + 'px)',
         transition: 'transform .22s cubic-bezier(.4, 0, .2, 1)',
       }
       const itemStyle = (rowH) => ({
@@ -753,55 +752,24 @@ window.__ModuleLoader__.load({
             ),
           ) : h('div', null,
             h('div', { style: { fontSize: '11px', opacity: 0.65, padding: '3px 10px 7px' } },
-              '自定义挡参数（改动即生效，采集重启约 0.6 秒）'),
-            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '0 10px 3px' } }, '清晰度'),
+              '读取速度（改动即生效，采集重启约 0.6 秒）'),
             h('div', { style: { position: 'relative' } },
               h('div', { style: thumbStyle }),
-              QUALITIES.map((q) => h('button', {
-                key: q.id,
-                title: '切到 ' + q.label + '（' + q.desc + '）',
-                onClick: () => setCustom({ quality: q.id }), disabled: busy,
-                style: itemStyle(ITEM_H_Q),
+              SPEEDS.map((sp) => h('button', {
+                key: sp.id,
+                title: '切到 ' + sp.label + '（' + sp.desc + '）',
+                onClick: () => setCustom({ speed: sp.id }), disabled: busy,
+                style: itemStyle(ITEM_H),
               },
-                h('div', { style: rowFlex(q.id === effQ) },
+                h('div', { style: rowFlex(sp.id === sSpeed) },
                   h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: nameStyle(q.id === effQ) }, q.label),
-                    h('div', { style: descStyle }, q.desc),
+                    h('div', { style: nameStyle(sp.id === sSpeed) }, sp.label),
+                    h('div', { style: descStyle }, sp.desc),
                   ),
-                  q.id === effQ ? check : null,
+                  sp.id === sSpeed ? check : null,
                 ),
               )),
             ),
-            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '6px 10px 3px' } }, '读取速度（正交开关）'),
-            SPEEDS.map((sp) => h('button', {
-              key: sp.id,
-              title: '切到 ' + sp.label + '（' + sp.desc + '）',
-              onClick: () => setCustom({ speed: sp.id }), disabled: busy,
-              style: itemStyle(ITEM_H),
-            },
-              h('div', { style: rowFlex(sp.id === sSpeed) },
-                h('div', { style: { flex: 1, minWidth: 0 } },
-                  h('div', { style: nameStyle(sp.id === sSpeed) }, sp.label),
-                  h('div', { style: descStyle }, sp.desc),
-                ),
-                sp.id === sSpeed ? check : null,
-              ),
-            )),
-            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '6px 10px 3px' } }, '节奏（换画面的门槛）'),
-            PACES.map((p) => h('button', {
-              key: p.id,
-              title: '切到 ' + p.label + '（' + p.desc + '）',
-              onClick: () => setCustom({ pace: p.id }), disabled: busy,
-              style: itemStyle(ITEM_H),
-            },
-              h('div', { style: rowFlex(p.id === pStatus) },
-                h('div', { style: { flex: 1, minWidth: 0 } },
-                  h('div', { style: nameStyle(p.id === pStatus) }, p.label),
-                  h('div', { style: descStyle }, p.desc),
-                ),
-                p.id === pStatus ? check : null,
-              ),
-            )),
             footBtn('← 返回挡位', () => setView('main')),
           ),
         ) : null,
