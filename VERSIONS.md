@@ -8,26 +8,27 @@
 | 发布名 | 打包自提交 | 日期 |
 |---|---|---|
 | dsh-vision-toggle-0.7.0.zip | 930edab | 2026-11-05 |
+| dsh-vision-toggle-0.8.0.zip | bcff5eb | 2026-11-05 |
 
 ## 现行（对包即对真）
 
 | 项 | 值 |
 |---|---|
-| 插件版本 | 0.7.0（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
-| 发布包 | dsh-vision-toggle-0.7.0.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
-| 本版提交 | 81400ad（0.6.3 ddagrab+拖选即确认）+ 0.7.0 编辑器五项提交（见 git log 0.7.0 段） |
+| 插件版本 | 0.8.0（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
+| 发布包 | dsh-vision-toggle-0.8.0.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
+| 本版提交 | 0.7.0 编辑器五项（见 git log 0.7.0 段）→ 0.8.0：8afe798 实时读取正交开关 + m11675 子面板简化 + bcff5eb 自定义降级为设置项 |
 | 形式规格 | **v4.5 ultra 拉取化**（不在包内；`vision_modes_spec.md` 与源码同仓维护，位于 fork 所在仓库的 `memory/vision/` 目录） |
 | 上游 | dsh-see-now 0.0.7（Apache-2.0，LICENSE/NOTICE 原样保留） |
-| 档位 | 六档：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra / custom；拉取档 wakeGapSec=∞ 零投递 |
+| 档位 | 主菜单五挡：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra；底部「⚙ 读取速度」设置（默认/实时，正交开关）；拉取档 wakeGapSec=∞ 零投递（custom 挡后端定义保留兼容旧 config，UI 不可达） |
 | 默认档 | off（DEFAULT_MODE，进程重启必回 off） |
-| 0.6.0 发布包 | 已被 0.7.0 取代，历史包在 fork/_archive/ |
+| 0.7.0 发布包 | 已被 0.8.0 取代，历史包在 fork/_archive/ |
 
 ## 版本声明分布（哪里有版本号，改版本改哪里）
 
 1. package.json:3 `version`
 2. dsh.plugin.json:4 `version`
-3. ERRORS.md:1 标题 `（v0.7.0）`
-4. CHANGELOG.md 段头（`## 0.7.0 —`）
+3. ERRORS.md:1 标题 `（v0.8.0）`
+4. CHANGELOG.md 段头（`## 0.8.0 —`）
 5. src 注释里的版本行（runner.js:76 / index.js:195 / config.js:21 / dialog.js:6 / client.js:12）——历史语义注记，不随小版本改
 
 ## 审查轨迹（七轮收敛 + 0.6.0 自查）
@@ -47,6 +48,8 @@
 | 0.6.2 | 34454f3 | 主人反馈框选+流畅度 → crop 框选阶段+离屏缓存性能层（拖动帧 2 次 drawImage） |
 | 0.6.3 | 81400ad | 主人反馈黑斑+多余 Enter → ddagrab 优先（GPU 桌面复制）+拖选松手即确认；1920×1200 实测零黑斑 |
 | 0.7.0 | 见 git log 0.7.0 段 | 主人六条反馈（黑方块光标/缩放/生涩/切不回/颜色/先调研）→ 调研 Flameshot/QQ/Snipaste 后五项改造；工具 ref 化根治闭包陈旧 |
+| 0.8.0 | 8afe798 + bcff5eb | 实时读取正交开关（主人 m10952 半分钟延迟反馈）；两次重启 API 级验证；m11675 子面板只留速度、m11771 自定义降级为设置项；闸门 0/0 |
+| 十 | 0.8.0（bcff5eb 包） | R42：VERSIONS.md 失修（本文件停留 0.7.0）→ 已补 0.8.0 段；代码本体无硬伤，实时开关五处落点全对 |
 
 ## 上游遗留物处置（版本统一巡检 2026-11-04）
 
@@ -66,4 +69,4 @@
 
 ## 版本链（规格侧）
 
-v4.0 旗舰审查融合 → v4.1 二轮 → v4.2 宽兼容三层 → v4.3 三轮收口 → v4.4 六档重定义（m08525 主人拍板 + R34-R38）→ **v4.5 ultra 拉取化（m09062 主人定位：ultra=参数拉满，0.4.0）**。历史版 archive 在 memory/vision/_archive/。
+v4.0 旗舰审查融合 → v4.1 二轮 → v4.2 宽兼容三层 → v4.3 三轮收口 → v4.4 六档重定义（m08525 主人拍板 + R34-R38）→ **v4.5 ultra 拉取化（m09062 主人定位：ultra=参数拉满，0.4.0）** → **v4.6 实时读取正交开关（0.8.0：speed 全局开关，REALTIME_OPTS fps30/cutAbs2/512MB/mouse，挡位定清晰度+基础节奏不动）**。历史版 archive 在 memory/vision/_archive/。
