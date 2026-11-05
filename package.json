@@ -29,7 +29,6 @@
     "./client": "./src/client.js",
     "./buffer": "./src/buffer.js",
     "./sentinel": "./src/sentinel.js",
-    "./auto-mode": "./src/autoMode.js",
     "./config": "./src/config.js",
     "./privacy": "./src/privacy.js",
     "./model-info": "./src/model-info.js",
@@ -52,10 +51,7 @@
     "test": "node --test",
     "debug:live": "node debug/live.mjs",
     "install-dev": "node scripts/install-dev.mjs",
-    "check": "node scripts/install-dev.mjs --check",
-    "sync:window": "node scripts/sync-window.mjs",
-    "check:window": "node scripts/sync-window.mjs --check",
-    "prepack": "node scripts/sync-window.mjs"
+    "check": "node scripts/install-dev.mjs --check"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.7"

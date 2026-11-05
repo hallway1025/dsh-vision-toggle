@@ -112,3 +112,10 @@
 
 ### 隐私
 - 画面只进本机会话上下文；帧默认不落盘；黑名单本地匹配零留痕（详见 README 隐私节）。
+### 0.7.0（第八轮审查修复 · 2026-11-05）
+
+- R39：删 exports["./auto-mode"]（指向 0.3.0 已删的 src/autoMode.js，死引用）
+- R40：删 scripts sync:window / check:window / prepack（指向已删的 scripts/sync-window.mjs，prepack 会让 npm pack 炸）
+- R41：README 隐私节措辞修正——截图键服务端临时文件为「写后即删」非「不写」
+
+
