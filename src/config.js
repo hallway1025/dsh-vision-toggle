@@ -27,6 +27,8 @@ function sanitize(raw) {
   out.pace = ['calm', 'normal', 'dense'].includes(p) ? p : 'normal';
   const q = raw?.quality;
   out.quality = ['low', 'standard', 'high', 'ultra'].includes(q) ? q : 'low';
+  const sp = raw?.speed;
+  out.speed = ['default', 'realtime'].includes(sp) ? sp : 'default'; // 0.8.0 读取速度（正交开关）
   out.updatedAt = typeof raw?.updatedAt === 'number' ? raw.updatedAt : 0;
   return out;
 }

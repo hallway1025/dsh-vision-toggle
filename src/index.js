@@ -6,7 +6,7 @@
  * 自己唤醒自己，停不下来（0.0.1 就是死在这儿）。
  */
 
-import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, MODES, DEFAULT_MODE } from './runner.js';
+import { createRunner, SCENE_OPTS, PACES, DEFAULT_PACE, MODES, DEFAULT_MODE, REALTIME_OPTS } from './runner.js';
 import { resolveFfmpeg } from './binaries.js';
 import { screenshotFlow } from './screenshot.js';
 import { visionToolSpec, TOOL_TIMEOUT_MS, DEFAULT_BLOCK_SEC } from './tool-spec.js';
@@ -202,6 +202,7 @@ async function registerAll(ctx) {
   let currentMode = DEFAULT_MODE;
   const cfg0 = loadConfig({ log });
   let paceMode = cfg0.pace ?? DEFAULT_PACE;
+  let speedMode = cfg0.speed === 'realtime' ? 'realtime' : 'default'; // 0.8.0 读取速度（正交开关）
   let modeSeq = 0;
   /** R21 黑名单（v1 无窗口标题源=接缝保留；status 暴露词条数供验证） */
   const privacy = createPrivacy();
@@ -219,7 +220,7 @@ async function registerAll(ctx) {
    * 不需要仿 watch 的 optsSig 重启路（那条路是给**阻塞 watch** 中途换参用的）。
    * 原画每次开启需确认（规格 §四）；关 = 采集停止，缓冲随 teardown 排空。
    */
-  const applyMode = async (modeId, { confirmed = false, quality = null, pace = null } = {}) => {
+  const applyMode = async (modeId, { confirmed = false, quality = null, pace = null, speed = null } = {}) => {
     const m = MODES[modeId];
     if (!m) return { ok: false, code: 101, error: `未知档位：${modeId}` };
     if (modeId === 'ultra' && currentMode !== 'ultra' && confirmed !== true) {
@@ -231,6 +232,7 @@ async function registerAll(ctx) {
     paceMode = modeId === 'custom'
       ? (pace && PACES[pace] ? pace : paceMode)   // 自定义：用面板传入的节奏，没传就保持现状
       : (m.pace ?? paceMode);                      // 固定档：档位自带节奏
+    speedMode = speed === 'realtime' || speed === 'default' ? speed : speedMode; // 面板没传就保持（全局正交）
     loopScene = null;
     stopLoop('换档');
     try { runner.stop(); } catch { /* 没在跑 */ }
@@ -242,15 +244,16 @@ async function registerAll(ctx) {
     }
     const opts = m.scene ? { ...SCENE_OPTS, cutAbs: PACES.dense.cutAbs } : { cutAbs: PACES[paceMode].cutAbs };
     if (m.pullMode) opts.pullMode = true;   // B3/R20：拉取档位帧进环形缓冲
+    if (speedMode === 'realtime') Object.assign(opts, REALTIME_OPTS); // 0.8.0：正交加速（fps30/512MB/鼠标/判新帧），门槛不覆盖
     // 清晰度覆盖（0.3.0）：low/high/max/custom 四档接受；off 无采集，ultra 固定满幅不降
     const effQ = ['low', 'standard', 'high'].includes(quality) && modeId !== 'off' && modeId !== 'ultra' ? quality : m.quality;
     const st = await runner.start({ src: { kind: 'screen' }, quality: effQ, opts });
     // 主动看改造（0.4.0 六档全拉取）：所有采集档统一起**监护循环**（只攒帧+心跳，零投递）。
     ensureLoop();
-    log(`档位 → ${m.label}（quality=${effQ} pace=${paceMode}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}${effQ !== m.quality ? ' 自定义' : ''}）`);
+    log(`档位 → ${m.label}（quality=${effQ} pace=${paceMode} speed=${speedMode}${m.scene ? ' scene' : ''}${m.pullMode ? ' pull' : ''}${effQ !== m.quality ? ' 自定义' : ''}）`);
     broadcastMode();
-    saveConfig({ mode: modeId, pace: paceMode, quality: effQ }, { log });
-    return { ok: true, mode: modeId, label: m.label, quality: effQ, running: true, started: st };
+    saveConfig({ mode: modeId, pace: paceMode, quality: effQ, speed: speedMode }, { log });
+    return { ok: true, mode: modeId, label: m.label, quality: effQ, pace: paceMode, speed: speedMode, running: true, started: st };
   };
 
   if (typeof ctx.on === 'function') {
@@ -583,6 +586,7 @@ async function registerAll(ctx) {
           buffered: s.buffered ?? null,
           scene: sceneMode,
           pace: paceMode,
+          speed: speedMode, // 0.8.0 读取速度回显
           loop: loop?.state() ?? null,
         });
       }
@@ -604,6 +608,7 @@ async function registerAll(ctx) {
           confirmed: args.confirmed === true,
           quality: typeof args.quality === 'string' ? args.quality : null,
           pace: typeof args.pace === 'string' ? args.pace : null,
+          speed: typeof args.speed === 'string' ? args.speed : null,
         });
         return json(res, r.ok ? 200 : 400, r);
       }

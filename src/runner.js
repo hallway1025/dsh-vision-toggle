@@ -73,6 +73,27 @@ export const PACES = Object.freeze({
 export const DEFAULT_PACE = 'normal';
 
 /**
+ * 0.8.0 实时读取参数（custom 挡 speed=realtime 时合入 opts）。
+ * 主人拍板（m11013/m11016）：黑块鼠标可见即可 + 参数拉满先达到效果。
+ * - fps 30：ddagrab 上限 60=显示器刷新率封顶，30 已是每帧跟手（打分 CPU ≈0.5 核 @1066×600）
+ * - cutAbs 覆盖为 2：比 dense(7) 更灵敏——否则主人小操作（画面变化小）过不了挡位门槛、
+ *   帧不进缓冲，watch 再快也无新帧可出，「1 秒延迟」承诺失效。清晰度仍跟挡位组合（m11030）。
+ *   low 的「大动作才留帧」语义保留，想更灵在节奏里选 dense；speed 只管延迟/帧率/缓冲/鼠标）
+ * - bufferMB 512：≈200 帧窗口（默认 48MB≈26 帧），分钟级回看
+ * - mouse true：鼠标追踪——ddagrab draw_mouse=1，光标以黑块形态帧帧入画（gdigrab 兜底分支
+ *   仍硬编码 draw_mouse=0：黑斑风险不回归，本机 pickScreenEngine 选 ddagrab）
+ * - speed 'realtime'：watch 出图判**新帧**（countSince lastPeekedT）——主人一操作、
+ *   帧一进缓冲，watch 下一拍（120ms 轮询）即返回；默认仍判缓冲总数（立即出最近图）
+ */
+export const REALTIME_OPTS = Object.freeze({
+  fps: 30,
+  cutAbs: 2,
+  bufferMB: 512,
+  mouse: true,
+  speed: 'realtime',
+});
+
+/**
  * 六档模式表（0.3.0 重定义 · 主人拍板 off/low/high/max/ultra + 自定义）。
  *
  * 每档是一组参数组合；createRunner 消费本表：`pullMode:true` 的档位（low/high/max/custom）
@@ -86,6 +107,7 @@ export const DEFAULT_PACE = 'normal';
  * | max     | 同 high 采集，dense 灵敏门槛（cutAbs 7）——持续感知全进池，不叫模型 | 最密帧流 |
  * | ultra   | 参数拉满：1600×900 采集 + dense 灵敏门槛（cutAbs 7），peek 按需出图 | 872tok/帧按需 |
  * | custom  | 用户自由组合参数（config 的 quality × pace，applyMode 传入） | 按所选参数 |
+ * | （全部挡） | speed=realtime 为**正交开关**（0.8.0）：任何挡位延迟压到秒级+fps30+512MB+鼠标追踪 | 延迟 1~3s |
  *
  * 字段约定：
  * - enabled:false 表示采集进程应停止（关档语义）。
@@ -276,12 +298,12 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
     const size = SIZES[q] ?? SIZES[DEFAULT_QUALITY];
     // B3 拉取模式（R20）：pullMode 档位采集回调只打分+帧进环形缓冲（48MB 上限），
     // 组图延迟到 peek/watch 按需做 —— 静止屏零组图成本，peek 才付 PNG 编码。
-    if (opts.pullMode) buffer = createBuffer();
+    if (opts.pullMode) buffer = createBuffer(opts.bufferMB ? { maxBytes: opts.bufferMB * 1024 * 1024 } : {});
     const p = createPipeline({ ...opts, width: size[0], height: size[1], buffer });
     // 记下"这次建管线用的调用方参数"（不含 oneShot）——watch 靠它发现"模式变了"。
     runOpts = { ...opts };
     delete runOpts.oneShot;
-    const s = { ...src, engine };
+    const s = { ...src, engine, mouse: src.mouse === true || opts.mouse === true };
     quality = q ?? DEFAULT_QUALITY;
     frames = 0;
     lastError = null;
@@ -403,11 +425,14 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
         // ── 拉取模式（B3/R20）：帧在环形缓冲里，等到「新帧够数」再按需组图 ──
         if (buffer) {
           const need = Math.max(1, minFrames);
+          // 0.8.0 实时读取（speed=realtime）：判**新帧**而非缓冲总数——默认档 count 恒 ≥1
+          // 会立即返回旧图（延迟体感的根因之一），实时档等 countSince(lastPeekedT) 有新帧才出。
+          const judgeNew = runOpts?.speed === 'realtime';
           while (Date.now() < deadline) {
             if (signal?.aborted) {
               return { ok: false, reason: 'cancelled', waited: (Date.now() - t0) / 1000 };
             }
-            if (buffer.count >= need) {
+            if ((judgeNew ? buffer.countSince(lastPeekedT) : buffer.count) >= need) {
               const sheet = pipeline.peekSheet(need, 15);
               if (sheet) {
                 const newest = sheet.frames[sheet.frames.length - 1]?.t ?? 0;
@@ -416,7 +441,7 @@ export function createRunner({ ffmpegPath = 'ffmpeg', log = () => {}, graceSec =
               }
             }
             if (!running) break;
-            await sleep(120);
+            await sleep(50); // 0.8.0：轮询 120→50ms（实时档事件化前的低垂果实，CPU 可忽略）
           }
           // 到点：手上攒的也算数（partial），一张都没有才报 no-change
           const partial = buffer.count > 0 ? pipeline.peekSheet(1, 0) : null;

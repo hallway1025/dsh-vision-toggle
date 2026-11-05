@@ -483,6 +483,7 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState('main') // 面板视图：main=档位列表 / custom=清晰度
       const [qStatus, setQStatus] = useState(null) // 当前生效清晰度（/status 回显）
       const [pStatus, setPStatus] = useState(null) // 当前生效节奏（/status 回显）
+      const [sSpeed, setSSpeed] = useState(null) // 当前读取速度（/status 回显，0.8.0 正交开关）
       const boxRef = useRef(null)
       const [snapOpen, setSnapOpen] = useState(false) // 截图键小箭头的微菜单
       useEffect(() => { if (!open) setView('main') }, [open]) // 面板收起复位视图
@@ -547,7 +548,7 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ mode: id, confirmed: true }),
           })
           setMode(s.mode ?? id)
-          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null)
+          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null); setSSpeed(s.speed ?? null)
           if (id === 'custom') setView('custom') // 自定义挡：停留子面板继续调参
         } catch (e) {
           setMode(prev); setErr(e.message)
@@ -629,6 +630,10 @@ window.__ModuleLoader__.load({
         { id: 'normal', label: '日常', desc: '门槛 12 · 默认节奏' },
         { id: 'dense', label: '灵敏', desc: '门槛 7 · 每一刀都留' },
       ]
+      const SPEEDS = [
+        { id: 'default', label: '默认', desc: '延迟 ~0.5 分钟 · 省资源' },
+        { id: 'realtime', label: '实时', desc: '延迟 ~1 秒 · 30fps + 鼠标追踪 + 512MB' },
+      ]
       const QUALITIES = [
         { id: 'low', label: '省流', desc: '800×450' },
         { id: 'standard', label: '标准', desc: '1066×600' },
@@ -685,7 +690,7 @@ window.__ModuleLoader__.load({
         onClick, disabled: busy, title,
       }, label)
 
-      const setCustom = async (patch) => { // 自定义挡参数：mode 固定 custom，patch 带 quality/pace（采集重启 ~0.6s）
+      const setCustom = async (patch) => { // 自定义挡参数：mode 固定 custom，patch 带 quality/pace/speed（采集重启 ~0.6s）
         if (busy) return
         setBusy(true); setErr(null)
         try {
@@ -693,14 +698,14 @@ window.__ModuleLoader__.load({
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ mode: 'custom', ...patch }),
           })
-          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null)
+          setQStatus(s.quality ?? null); setPStatus(s.pace ?? null); setSSpeed(s.speed ?? null)
         } catch (e) { setErr(e.message); setTimeout(() => setErr(null), 4000) }
         finally { setBusy(false) }
       }
       const togglePanel = () => {
         const next = !open
         setOpen(next)
-        if (next) api('/status').then((s) => { setQStatus(s.quality ?? null); setPStatus(s.pace ?? null) }).catch(() => {}) // 打开面板拉最新参数
+        if (next) api('/status').then((s) => { setQStatus(s.quality ?? null); setPStatus(s.pace ?? null); setSSpeed(s.speed ?? null) }).catch(() => {}) // 打开面板拉最新参数
       }
 
       return h('div', { ref: boxRef, style: anchorStyle },
@@ -767,6 +772,21 @@ window.__ModuleLoader__.load({
                 ),
               )),
             ),
+            h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '6px 10px 3px' } }, '读取速度（正交开关）'),
+            SPEEDS.map((sp) => h('button', {
+              key: sp.id,
+              title: '切到 ' + sp.label + '（' + sp.desc + '）',
+              onClick: () => setCustom({ speed: sp.id }), disabled: busy,
+              style: itemStyle(ITEM_H),
+            },
+              h('div', { style: rowFlex(sp.id === sSpeed) },
+                h('div', { style: { flex: 1, minWidth: 0 } },
+                  h('div', { style: nameStyle(sp.id === sSpeed) }, sp.label),
+                  h('div', { style: descStyle }, sp.desc),
+                ),
+                sp.id === sSpeed ? check : null,
+              ),
+            )),
             h('div', { style: { fontSize: '10.5px', opacity: 0.5, padding: '6px 10px 3px' } }, '节奏（换画面的门槛）'),
             PACES.map((p) => h('button', {
               key: p.id,
