@@ -536,7 +536,7 @@ window.__ModuleLoader__.load({
           try {
             const d = await api('/dialog')
             ok = await askConfirm(d.text || '原画档成本较高，确认开启？')
-          } catch { ok = await askConfirm(sSpeed === 'realtime' ? 'ultra：每次观看 ≈872 token，连续实时观看最高 ≈26,160/分钟。确认开启？' : 'ultra：约每分钟 6,976 token。确认开启？') }
+          } catch { ok = await askConfirm(sSpeed === 'realtime' ? 'ultra：每次观看 ≈872 token（连续实时观看上限很高）。确认开启？' : 'ultra：每次观看 ≈872 token（不看不耗）。确认开启？') }
           if (!ok) return
         }
         const prev = modeRef.current

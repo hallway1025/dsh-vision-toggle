@@ -20,10 +20,10 @@ export function ultraDialogText(info, speed = 'default') {
     const pct = ((perMinHi / info.contextTokens) * 100).toFixed(2);
     return `ultra：连续实时观看最高 ≈${perMinHi.toLocaleString('en-US')} token/分钟，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
   }
-  const perMin = ULTRA_TOKEN_PER_FRAME * 8;
+  // 0.8.1（m11179）：默认态同改单价口径——观看频率无固定值（=主人操作节奏+模型判断），不报拍脑袋的每分钟数
   if (!info || !info.contextTokens) {
-    return `ultra：约每分钟 ${perMin.toLocaleString('en-US')} token（按每分钟看 8 次估）。确认开启？`;
+    return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token（不看不耗，采集零消耗）。确认开启？`;
   }
-  const pct = ((perMin / info.contextTokens) * 100).toFixed(2);
-  return `ultra：约每分钟 ${perMin.toLocaleString('en-US')} token，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
+  const pct = ((ULTRA_TOKEN_PER_FRAME / info.contextTokens) * 100).toFixed(2);
+  return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
 }
