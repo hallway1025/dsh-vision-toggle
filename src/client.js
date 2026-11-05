@@ -536,7 +536,7 @@ window.__ModuleLoader__.load({
           try {
             const d = await api('/dialog')
             ok = await askConfirm(d.text || '原画档成本较高，确认开启？')
-          } catch { ok = await askConfirm(sSpeed === 'realtime' ? 'ultra：每次观看 ≈872 token（连续实时观看上限很高）。确认开启？' : 'ultra：每次观看 ≈872 token（不看不耗）。确认开启？') }
+          } catch { ok = await askConfirm('ultra：满载 ≈26,160 token/分钟（每次观看 ≈872，不看不耗）。确认开启？') }
           if (!ok) return
         }
         const prev = modeRef.current
@@ -632,7 +632,7 @@ window.__ModuleLoader__.load({
       ]
       const SPEEDS = [
         { id: 'default', label: '默认', desc: '延迟 ~0.5 分钟 · 省资源' },
-        { id: 'realtime', label: '实时', desc: '延迟 ~1 秒 · 每次观看 ≈388 token，连续实时观看 ≈1 万/分钟' },
+        { id: 'realtime', label: '实时', desc: '延迟 ~1 秒 · 每次观看 ≈388 token，满载 ≈11,640/分钟' },
       ]
       const QUALITIES = [
         { id: 'low', label: '省流', desc: '800×450' },

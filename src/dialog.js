@@ -10,20 +10,12 @@
 const ULTRA_TOKEN_PER_FRAME = 872; // ultra 档 1600×900 单帧 ≈ 872 tok（SIZES 注释同源）
 
 export function ultraDialogText(info, speed = 'default') {
-  // 0.8.0 主人口径（m11149/m11160）：警告只报每分钟消耗预估，参数描述删去；
-  // 默认=间歇观看口径（8 次/分钟），实时=连续观看口径（模型每轮 2~3s ≈ 15~30 次/分钟）
-  if (speed === 'realtime') {
-    const perMinHi = ULTRA_TOKEN_PER_FRAME * 30;
-    if (!info || !info.contextTokens) {
-      return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token，连续实时观看最高 ≈${perMinHi.toLocaleString('en-US')}/分钟。确认开启？`;
-    }
-    const pct = ((perMinHi / info.contextTokens) * 100).toFixed(2);
-    return `ultra：连续实时观看最高 ≈${perMinHi.toLocaleString('en-US')} token/分钟，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
-  }
-  // 0.8.1（m11179）：默认态同改单价口径——观看频率无固定值（=主人操作节奏+模型判断），不报拍脑袋的每分钟数
+  // 0.8.1 终版（m11187 主人口径）：警告统一写**满载消耗**——872/次 × 模型每轮 2~3s 的物理上限 30 次/分钟
+  // = 26,160 token/分钟；实际消耗随观看次数线性下降，不看不耗（采集零消耗）
+  const max = ULTRA_TOKEN_PER_FRAME * 30;
   if (!info || !info.contextTokens) {
-    return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token（不看不耗，采集零消耗）。确认开启？`;
+    return `ultra：满载 ≈${max.toLocaleString('en-US')} token/分钟（每次观看 ≈${ULTRA_TOKEN_PER_FRAME}，不看不耗）。确认开启？`;
   }
-  const pct = ((ULTRA_TOKEN_PER_FRAME / info.contextTokens) * 100).toFixed(2);
-  return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
+  const pct = ((max / info.contextTokens) * 100).toFixed(2);
+  return `ultra：满载 ≈${max.toLocaleString('en-US')} token/分钟（每次观看 ≈${ULTRA_TOKEN_PER_FRAME}），约占 ${info.name} 上下文 ${pct}%。确认开启？`;
 }
