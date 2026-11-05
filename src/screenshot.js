@@ -72,20 +72,46 @@ export async function grabFullScreen(ffmpegPath) {
   const fsp = await import('node:fs/promises');
   const tmp = path.join(os.tmpdir(), 'dsh-shot-' + Date.now() + '-' + process.pid);
   const isPng = (b) => b && b.length > 8 && b.readUInt32BE(0) === 0x89504e47;
-  try {
+  // 黑帧检测：ddagrab 在 GPU 驱动重置/独占全屏等状态下会“成功”输出全黑帧（魔数合法、不报错），
+  // isPng 拦不住（主人 11-06 01:47 黑屏实测）。缩成 4x4 灰度求均值：<8 判黑。
+  // 误判代价=白跑一次 gdigrab（正常截图平均亮度不可能 <8）。
+  const looksBlack = async (file) => {
     try {
-      await spawnFile(ffmpegPath, [
-        '-hide_banner', '-loglevel', 'error',
-        '-filter_complex', 'ddagrab=draw_mouse=0,hwdownload,format=bgra',
-        '-frames:v', '1',
-        '-y', tmp + '-dda.png',
-      ], { timeout: 15000 });
-      const buf = await fsp.readFile(tmp + '-dda.png').catch(() => null);
-      if (isPng(buf)) return buf;
-      log('ddagrab 输出无效，回退 gdigrab 多帧');
-    } catch (e) {
-      log('ddagrab 不可用（回退 gdigrab 多帧）:', e && e.message);
+      const r = await spawnFile(ffmpegPath, [
+        '-hide_banner', '-loglevel', 'error', '-i', file,
+        '-vf', 'scale=4:4', '-frames:v', '1',
+        '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1',
+      ], { timeout: 10000 });
+      if (!r.stdout.length) return false; // 读不到统计=不判黑（保守）
+      let sum = 0;
+      for (const b of r.stdout) sum += b;
+      return sum / r.stdout.length < 8;
+    } catch { return false; }
+  };
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await spawnFile(ffmpegPath, [
+          '-hide_banner', '-loglevel', 'error',
+          '-filter_complex', 'ddagrab=draw_mouse=0,hwdownload,format=bgra',
+          '-frames:v', '1',
+          '-y', tmp + '-dda.png',
+        ], { timeout: 15000 });
+        const buf = await fsp.readFile(tmp + '-dda.png').catch(() => null);
+        if (isPng(buf)) {
+          if (await looksBlack(tmp + '-dda.png')) {
+            log('ddagrab 黑帧（第 ' + attempt + ' 次）' + (attempt < 2 ? '，重试' : '，回退 gdigrab 多帧'));
+            continue;
+          }
+          return buf;
+        }
+        log('ddagrab 输出无效');
+      } catch (e) {
+        log('ddagrab 不可用:', e && e.message);
+        break;
+      }
     }
+    log('回退 gdigrab 多帧');
     await spawnFile(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-f', 'gdigrab', '-framerate', '30',
@@ -96,9 +122,12 @@ export async function grabFullScreen(ffmpegPath) {
     let last = null;
     for (let n = 1; n <= 9; n++) {
       const b = await fsp.readFile(tmp + '-' + n + '.png').catch(() => null);
-      if (isPng(b)) last = b;
+      if (!isPng(b)) continue;
+      last = b;
+      if (!(await looksBlack(tmp + '-' + n + '.png'))) return b; // 第一个非黑帧即用
     }
     if (!last) throw new Error('输出不是 PNG');
+    log('gdigrab 全黑帧（桌面可能真的暗）');
     return last;
   } finally {
     fsp.unlink(tmp + '-dda.png').catch(() => {});
