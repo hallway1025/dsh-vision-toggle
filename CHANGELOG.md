@@ -9,6 +9,12 @@
 - 截图鼠标光标修复：ddagrab 加 draw_mouse=0（此前硬件光标层在 GPU 合成下画成大黑方块）；截图不带鼠标指针=微信同款行为。
 - 文字工具字号随粗细档缩放；Esc 在文字输入框打开时只关输入框；输入框聚焦时编辑器热键（Space/Ctrl+Z）不再误触发。
 
+**第八轮审查修复（R39/R40/R41）**
+
+- 删 exports["./auto-mode"] 死引用（指向 0.3.0 已删的 src/autoMode.js）
+- 删 scripts sync:window / check:window / prepack 三条（指向已删的 scripts/sync-window.mjs，prepack 会让 npm pack 炸）
+- README 隐私节措辞修正：服务端临时文件「写后即删」非「不写」
+
 ## 0.6.3 — 拖选即确认 + ddagrab 黑斑根治（2026-11-05）
 
 - 框选松手即进入标注（此前需再按 Enter）；无拖选直接标注=全屏。
@@ -112,10 +118,5 @@
 
 ### 隐私
 - 画面只进本机会话上下文；帧默认不落盘；黑名单本地匹配零留痕（详见 README 隐私节）。
-### 0.7.0（第八轮审查修复 · 2026-11-05）
-
-- R39：删 exports["./auto-mode"]（指向 0.3.0 已删的 src/autoMode.js，死引用）
-- R40：删 scripts sync:window / check:window / prepack（指向已删的 scripts/sync-window.mjs，prepack 会让 npm pack 炸）
-- R41：README 隐私节措辞修正——截图键服务端临时文件为「写后即删」非「不写」
 
 
