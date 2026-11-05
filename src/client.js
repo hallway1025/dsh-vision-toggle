@@ -480,7 +480,7 @@ window.__ModuleLoader__.load({
       modeRef.current = mode
       // 2 键 UI（m08294 两键 / m08444 线条图标 + GPT 式档位菜单 + 自定义清晰度）
       const [open, setOpen] = useState(false)
-      const [view, setView] = useState('main') // 面板视图：main=档位列表 / custom=清晰度
+      const [view, setView] = useState('main') // 面板视图：main=挡位列表 / speed=读取速度设置（m11771）
       const [qStatus, setQStatus] = useState(null) // 当前生效清晰度（/status 回显）
       const [pStatus, setPStatus] = useState(null) // 当前生效节奏（/status 回显）
       const [sSpeed, setSSpeed] = useState(null) // 当前读取速度（/status 回显，0.8.0 正交开关）
@@ -549,7 +549,6 @@ window.__ModuleLoader__.load({
           })
           setMode(s.mode ?? id)
           setQStatus(s.quality ?? null); setPStatus(s.pace ?? null); setSSpeed(s.speed ?? null)
-          if (id === 'custom') setView('custom') // 自定义挡：停留子面板继续调参
         } catch (e) {
           setMode(prev); setErr(e.message)
           setTimeout(() => setErr(null), 4000)
@@ -650,9 +649,11 @@ window.__ModuleLoader__.load({
       )
       const curIdx = Math.max(0, MODES.findIndex((m) => m.id === mode))
       const curLabel = MODES[curIdx]?.label ?? String(mode)
-      // 自定义=独立挡位（m08539/m08564）：任何档都能切；子面板只留读取速度（m11675 简化：默认/实时）
+      // m11771：自定义不算挡位（主菜单不列 custom），「⚙ 读取速度」=对当前挡位生效的设置项（speed 正交开关）
+      const FMODES = MODES.filter((m) => m.id !== 'custom')
+      const listIdx = FMODES.findIndex((m) => m.id === mode)
       const spIdx = Math.max(0, SPEEDS.findIndex((sp) => sp.id === sSpeed))
-      const thumbIdx = view === 'custom' ? spIdx : curIdx
+      const thumbIdx = view === 'speed' ? spIdx : listIdx
       const anchorStyle = { ...rowStyle, position: 'relative' }
       const panelStyle = {
         position: 'absolute', bottom: 'calc(100% + 8px)', left: 0,
@@ -668,6 +669,7 @@ window.__ModuleLoader__.load({
         background: 'var(--dsh-primary-color, #4f7cff)', opacity: 0.14,
         transform: 'translateY(' + thumbIdx * ITEM_H + 'px)',
         transition: 'transform .22s cubic-bezier(.4, 0, .2, 1)',
+        visibility: (view === 'main' && listIdx < 0) ? 'hidden' : 'visible',
       }
       const itemStyle = (rowH) => ({
         display: 'block', width: '100%', textAlign: 'left',
@@ -689,13 +691,13 @@ window.__ModuleLoader__.load({
         onClick, disabled: busy, title,
       }, label)
 
-      const setCustom = async (patch) => { // 自定义挡参数：mode 固定 custom，patch 带 quality/pace/speed（采集重启 ~0.6s）
+      const setSpeed = async (sp) => { // 读取速度：正交设置，对当前挡位生效（m11771；off 时仅存配置待开档生效）
         if (busy) return
         setBusy(true); setErr(null)
         try {
           const s = await api('/mode', {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ mode: 'custom', ...patch }),
+            body: JSON.stringify({ mode: modeRef.current, speed: sp }),
           })
           setQStatus(s.quality ?? null); setPStatus(s.pace ?? null); setSSpeed(s.speed ?? null)
         } catch (e) { setErr(e.message); setTimeout(() => setErr(null), 4000) }
@@ -735,12 +737,11 @@ window.__ModuleLoader__.load({
           view === 'main' ? h('div', null,
             h('div', { style: { position: 'relative' } },
               h('div', { style: thumbStyle }),
-              MODES.map((m) => h('button', {
+              FMODES.map((m) => h('button', {
                 key: m.id,
                 title: TITLES[m.id],
-                // 延迟 420ms 收面板：滑块动画（.22s）播完再收（m08497「切换没用滑块效果」）；
-                // custom 挡例外：面板保持开、pick 成功后切参数子面板（收起会被复位 effect 弹回主菜单）
-                onClick: () => { pick(m.id); if (m.id !== 'custom') setTimeout(() => setOpen(false), 420) },
+                // 延迟 420ms 收面板：滑块动画（.22s）播完再收（m08497「切换没用滑块效果」）
+                onClick: () => { pick(m.id); setTimeout(() => setOpen(false), 420) },
                 disabled: busy,
                 style: itemStyle(ITEM_H),
               },
@@ -750,27 +751,31 @@ window.__ModuleLoader__.load({
                 ),
               )),
             ),
-          ) : h('div', null,
-            h('div', { style: { fontSize: '11px', opacity: 0.65, padding: '3px 10px 7px' } },
-              '读取速度（改动即生效，采集重启约 0.6 秒）'),
-            h('div', { style: { position: 'relative' } },
-              h('div', { style: thumbStyle }),
-              SPEEDS.map((sp) => h('button', {
-                key: sp.id,
-                title: '切到 ' + sp.label + '（' + sp.desc + '）',
-                onClick: () => setCustom({ speed: sp.id }), disabled: busy,
-                style: itemStyle(ITEM_H),
-              },
-                h('div', { style: rowFlex(sp.id === sSpeed) },
-                  h('div', { style: { flex: 1, minWidth: 0 } },
-                    h('div', { style: nameStyle(sp.id === sSpeed) }, sp.label),
-                    h('div', { style: descStyle }, sp.desc),
-                  ),
-                  sp.id === sSpeed ? check : null,
-                ),
-              )),
+            h('div', { style: { borderTop: '1px solid var(--dsh-border-color, rgba(127,127,127,0.25))', marginTop: '4px' } }),
+            h('button', {
+              key: 'speed-entry',
+              title: '读取速度（对当前挡位生效）：默认 ≈半分钟一拍 · 实时 ≈1 秒',
+              onClick: () => setView('speed'), disabled: busy,
+              style: itemStyle(ITEM_H),
+            },
+              h('div', { style: rowFlex(false) },
+                h('div', { style: { ...nameStyle(false), flex: 1 } }, '⚙ 读取速度'),
+                h('span', { style: { fontSize: '11px', opacity: 0.55 } }, SPEEDS.find((sp) => sp.id === sSpeed)?.label ?? ''),
+              ),
             ),
-            footBtn('← 返回挡位', () => setView('main')),
+          ) : h('div', { style: { position: 'relative' } },
+            h('div', { style: thumbStyle }),
+            SPEEDS.map((sp) => h('button', {
+              key: sp.id,
+              title: sp.label + '：' + sp.desc,
+              onClick: () => setSpeed(sp.id), disabled: busy,
+              style: itemStyle(ITEM_H),
+            },
+              h('div', { style: rowFlex(sp.id === sSpeed) },
+                h('div', { style: { ...nameStyle(sp.id === sSpeed), flex: 1 } }, sp.label),
+                sp.id === sSpeed ? check : null,
+              ),
+            )),
           ),
         ) : null,
         err ? h('span', { title: err, style: { fontSize: '11px', color: '#e05252', marginLeft: '2px' } }, '⚠') : null,
