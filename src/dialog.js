@@ -9,12 +9,21 @@
 
 const ULTRA_TOKEN_PER_FRAME = 872; // ultra 档 1600×900 单帧 ≈ 872 tok（SIZES 注释同源）
 
-export function ultraDialogText(info) {
-  // 0.7.0 主人口径（m09916）：警告只说「高消耗 + 大约每分钟多少 token」——按 peek 8 次/分钟估
+export function ultraDialogText(info, speed = 'default') {
+  // 0.8.0 主人口径（m11149/m11160）：警告只报每分钟消耗预估，参数描述删去；
+  // 默认=间歇观看口径（8 次/分钟），实时=连续观看口径（模型每轮 2~3s ≈ 15~30 次/分钟）
+  if (speed === 'realtime') {
+    const perMinHi = ULTRA_TOKEN_PER_FRAME * 30;
+    if (!info || !info.contextTokens) {
+      return `ultra：每次观看 ≈${ULTRA_TOKEN_PER_FRAME} token，连续实时观看最高 ≈${perMinHi.toLocaleString('en-US')}/分钟。确认开启？`;
+    }
+    const pct = ((perMinHi / info.contextTokens) * 100).toFixed(2);
+    return `ultra：连续实时观看最高 ≈${perMinHi.toLocaleString('en-US')} token/分钟，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
+  }
   const perMin = ULTRA_TOKEN_PER_FRAME * 8;
   if (!info || !info.contextTokens) {
-    return `ultra：高消耗档（1600×900 满幅 + 最高灵敏度），按每分钟看 8 次估约 ${perMin.toLocaleString('en-US')} token/分钟。确认开启？`;
+    return `ultra：约每分钟 ${perMin.toLocaleString('en-US')} token（按每分钟看 8 次估）。确认开启？`;
   }
   const pct = ((perMin / info.contextTokens) * 100).toFixed(2);
-  return `ultra：高消耗档 —— 约每分钟 ${perMin.toLocaleString('en-US')} token（按 peek 8 次估），约占 ${info.name} 上下文 ${pct}%。确认开启？`;
+  return `ultra：约每分钟 ${perMin.toLocaleString('en-US')} token，约占 ${info.name} 上下文 ${pct}%。确认开启？`;
 }

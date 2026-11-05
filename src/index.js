@@ -597,7 +597,7 @@ async function registerAll(ctx) {
           ok: true,
           model: info?.name ?? null,
           contextTokens: info?.contextTokens ?? null,
-          text: ultraDialogText(info),
+          text: ultraDialogText(info, speedMode), // 0.8.0：按当前读取速度分叉口径（m11149/m11160）
         });
       }
       if (req.method === 'POST' && p === '/mode') {
