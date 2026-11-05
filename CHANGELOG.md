@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 — 发布物瘦身（第十一轮审查 P1/P3/P2）
+
+- P1：发布物排除 `scripts/testdata/`（262KB 调试视频只服务 sim.mjs 开发期回放测试）——发布 zip 393KB→约 131KB、npm 包同步瘦身。
+- P3：`src/sentinel.js`（v2 预留接口，零调用）移出发布物：npm files 否定 + .gitattributes export-ignore + exports 删 `./sentinel`（R39 同族引用面三处同步）；v2 实装时一起加回。
+- P2（保守标注）：pipeline.js 推送攒帧参数区与 checkFlush/flush 标注「拉取模式下不执行，仅文件回放兜底保留」。
+
 ## 0.8.0 — 实时读取（正交开关，2026-11-05）
 - 自定义子面板简化：只留「读取速度」（默认/实时）二选一，删除清晰度与节奏两组（主人 m11675「其他无需调整」）——quality/pace 固定档位默认（standard/normal），后端 /mode 与 config 白名单不动。
 - 自定义从挡位降级为设置项（主人 m11771）：主菜单只列 5 挡（off/low/high/max/ultra），底部新增「⚙ 读取速度」设置入口，子面板纯两项（默认/实时，无说明文字，修 name+desc 两行挤 34px 行高的 UI 重叠）；setSpeed 对当前挡位生效（speed 正交开关），后端零改动免重启。

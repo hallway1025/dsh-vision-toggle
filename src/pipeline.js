@@ -101,6 +101,8 @@ export const DEFAULTS = Object.freeze({
   /** 和上一张留下的帧差小于这个分就不留（0–255 刻度，见 cuts.js）。 */
   dupMin: 8,
 
+// 【推送模式参数区】0.4.0 起六档全 pullMode，以下攒帧/加成/截断参数在拉取模式下无消费者；
+// 保留仅为文件回放（watch source:file）推送兜底路径可用。第十一轮审查 P2（保守标注，v2 再评估整段删除）。
   // 档位
   dtFrames: 12,
   smoothFrames: 6,
@@ -262,7 +264,8 @@ export function createPipeline(opts = {}) {
     return solve(seqOf(frames), { binCost: o.binCost });
   }
 
-  function checkFlush(t) {
+  // 【拉取模式下不执行】checkFlush 只服务推送攒帧（pullMode 时 keep() 里已分支跳过）。
+function checkFlush(t) {
     if (frames.length === 0) return;
     const p = plan();
 
@@ -314,6 +317,7 @@ export function createPipeline(opts = {}) {
     if (frames.length >= o.maxFrames) flush(t, 'cap');
   }
 
+  // 【拉取模式下不执行】flush 只服务推送攒帧；拉取档出图走 peekSheet()。
   function flush(t, why) {
     if (!frames.length) return;
     const batch = frames;
