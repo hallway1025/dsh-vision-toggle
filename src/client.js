@@ -151,11 +151,20 @@ window.__ModuleLoader__.load({
       const panRef = useRef(null)                     // {sx,sy,sl,st} 平移起点
       const wrapRef = useRef(null)                    // edit 阶段滚动容器
       const txtRef = useRef(false)
+      // 0.9.0：箭头拖动调整（端点/线身）+ hover 光标反馈
+      const pickRef = useRef(null)                 // {idx, handle:'start'|'end'|'move', off?, moved?}
+      const [hoverTick, setHoverTick] = useState(0) // hover 命中变化时驱动光标重渲染
+      const hoverHitRef = useRef(false)
 
       // 原图加载；png 变化（重截）自动回 crop
       useEffect(() => {
         const img = new Image()
-        img.onload = () => { imgRef.current = img; setSel(null); dragRef.current = null; setReady(true) }
+        img.onload = () => {
+          imgRef.current = img
+          st.base = img; st.ops = []; st.redo = []; st.cache = null // 0.6.2 回归修复：底图从未赋给 st.base → canvas 0×0 黑屏（m13008 考古 34454f3 弄丢）
+          setSel(null); dragRef.current = null
+          setReady(true)
+        }
         img.onerror = () => onClose()
         img.src = 'data:image/png;base64,' + png
       }, [png])
@@ -175,6 +184,7 @@ window.__ModuleLoader__.load({
           if (e.key === 'Escape') {
             e.stopPropagation()
             if (txtRef.current) { txtValRef.current = ''; setTxtVal(''); setTxt(null); return }
+            if (pickRef.current) { pickRef.current = null; redraw(); return }
             if (toolRef.current === 'crop') { toolRef.current = 'rect'; setTool('rect'); setSel(null); dragRef.current = null }
             else onClose()
           } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
@@ -265,6 +275,36 @@ window.__ModuleLoader__.load({
         if (st.cache) g.drawImage(st.cache, 0, 0)
         if (extra) drawOp(g, extra)
       }
+      // 0.9.0：箭头命中检测（图像坐标；端点优先于线身；从顶层往下找）
+      function hitArrow(p) {
+        const R = 12
+        for (let i = st.ops.length - 1; i >= 0; i--) {
+          const op = st.ops[i]
+          if (op.t !== 'arr') continue
+          const d1 = Math.hypot(p.x - op.x, p.y - op.y), d2 = Math.hypot(p.x - op.x2, p.y - op.y2)
+          if (d1 <= R) return { idx: i, handle: 'start', moved: false }
+          if (d2 <= R) return { idx: i, handle: 'end', moved: false }
+          const vx = op.x2 - op.x, vy = op.y2 - op.y, len2 = vx * vx + vy * vy
+          if (len2 > 0) {
+            const tt = Math.max(0, Math.min(1, ((p.x - op.x) * vx + (p.y - op.y) * vy) / len2))
+            if (Math.hypot(p.x - (op.x + tt * vx), p.y - (op.y + tt * vy)) <= Math.max(6, op.w * 1.5)) {
+              return { idx: i, handle: 'move', off: { dx: p.x - op.x, dy: p.y - op.y }, moved: false }
+            }
+          }
+        }
+        return null
+      }
+      // 0.9.0：拖动帧重绘 + 端点手柄（白边蓝点，拖动期间可见）
+      function redrawPick(op) {
+        redraw()
+        if (!op) return
+        const cv = cvRef.current; if (!cv) return
+        const g = cv.getContext('2d')
+        for (const [hx, hy] of [[op.x, op.y], [op.x2, op.y2]]) {
+          g.beginPath(); g.arc(hx, hy, 9, 0, Math.PI * 2); g.fillStyle = '#ffffff'; g.fill()
+          g.beginPath(); g.arc(hx, hy, 6, 0, Math.PI * 2); g.fillStyle = '#4f7cff'; g.fill()
+        }
+      }
       const toImg = (e) => {
         const cv = cvRef.current; const r = cv.getBoundingClientRect()
         return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }
@@ -277,7 +317,23 @@ window.__ModuleLoader__.load({
             if (wrap) { wrap.scrollLeft = panRef.current.sl - (e.clientX - panRef.current.sx); wrap.scrollTop = panRef.current.st - (e.clientY - panRef.current.sy) }
             return
           }
-          if (!dragRef.current && !st.drawing) return
+          if (!dragRef.current && !st.drawing && !pickRef.current) return
+          const pick = pickRef.current
+          if (pick && !st.drawing && toolRef.current !== 'crop') {
+            const op = st.ops[pick.idx]
+            if (!op || op.t !== 'arr') { pickRef.current = null; return }
+            const p = toImg(e)
+            pick.moved = true
+            if (pick.handle === 'start') { op.x = p.x; op.y = p.y }
+            else if (pick.handle === 'end') { op.x2 = p.x; op.y2 = p.y }
+            else {
+              const nx = p.x - pick.off.dx, ny = p.y - pick.off.dy
+              op.x2 += nx - op.x; op.x = nx
+              op.y2 += ny - op.y; op.y = ny
+            }
+            redrawStatic(); redrawPick(op)
+            return
+          }
           if (toolRef.current === 'crop' && dragRef.current) {
             const p = toImgCrop(e)
             dragRef.current = { ...dragRef.current, x2: p.x, y2: p.y }
@@ -288,6 +344,13 @@ window.__ModuleLoader__.load({
         }
         const up = () => {
           if (panRef.current) { panRef.current = null; return }
+          if (pickRef.current) {
+            const pick = pickRef.current
+            pickRef.current = null
+            if (pick.moved) { st.redo = []; redrawStatic() }  // 拖动=内容已变，redo 栈作废
+            redraw()
+            return
+          }
           if (toolRef.current === 'crop' && dragRef.current) {
             const r = dragRef.current; dragRef.current = null
             if (Math.abs(r.x2 - r.x) >= 5 && Math.abs(r.y2 - r.y) >= 5) { setSel(r); confirmRect(r) }
@@ -357,6 +420,11 @@ window.__ModuleLoader__.load({
         if (toolRef.current === 'crop') { const p = toImgCrop(e); dragRef.current = { x: p.x, y: p.y, x2: p.x, y2: p.y }; setSel(null); return }
         if (toolRef.current === 'text') { const p = toImg(e); setTxt({ cx: e.clientX, cy: e.clientY, px: p.x, py: p.y }); setTxtVal(''); txtValRef.current = ''; return }
         const p = toImg(e)
+        // 0.9.0：箭头工具下先试命中已有箭头（端点/线身），命中=进入调整模式而不是画新的
+        if (toolRef.current === 'arr') {
+          const hit = hitArrow(p)
+          if (hit) { pickRef.current = hit; return }
+        }
         st.drawing = { t: toolRef.current, c: colorRef.current, w: widthRef.current, x: p.x, y: p.y, x2: p.x, y2: p.y }
       }
       const undo = () => { const op = st.ops.pop(); if (op) st.redo.push(op); redrawStatic(); redraw() }
@@ -414,8 +482,8 @@ window.__ModuleLoader__.load({
       const cvsW = st.base ? st.base.width : 0
       const cvsH = st.base ? st.base.height : 0
       const cvsStyle = zoom == null
-        ? { maxWidth: '94vw', maxHeight: '76vh', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
-        : { width: Math.round(cvsW * zoom) + 'px', height: Math.round(cvsH * zoom) + 'px', maxWidth: 'none', maxHeight: 'none', cursor: space ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
+        ? { maxWidth: '94vw', maxHeight: '76vh', cursor: (space || hoverHitRef.current) ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
+        : { width: Math.round(cvsW * zoom) + 'px', height: Math.round(cvsH * zoom) + 'px', maxWidth: 'none', maxHeight: 'none', cursor: (space || hoverHitRef.current) ? 'grab' : 'crosshair', boxShadow: '0 6px 30px rgba(0,0,0,.6)', background: '#000' }
       const zoomLabel = zoom == null ? '适合' : Math.round(zoom * 100) + '%'
       return asOverlay(h('div', {
         style: { position: 'fixed', inset: 0, zIndex: 2147483646, background: 'rgba(17,17,17,.92)', overflow: 'hidden', userSelect: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' },
@@ -428,7 +496,14 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' } },
               h('div', { ref: wrapRef, style: { overflow: 'auto', maxWidth: '94vw', maxHeight: '76vh', lineHeight: 0 } },
                 h('div', { style: { position: 'relative', display: 'inline-block', lineHeight: 0 } },
-                  h('canvas', { ref: cvRef, onMouseDown: start, style: cvsStyle }),
+                  h('canvas', { ref: cvRef, onMouseDown: start,
+                    onMouseMove: (e) => {
+                      // 0.9.0：箭头工具 hover 命中→抓手光标（非拖动态才检测）
+                      if (toolRef.current !== 'arr' || st.drawing || pickRef.current || spaceRef.current) { if (hoverHitRef.current) { hoverHitRef.current = false; setHoverTick((x) => x + 1) } return }
+                      const hit = hitArrow(toImg(e))
+                      if (!!hit !== hoverHitRef.current) { hoverHitRef.current = !!hit; setHoverTick((x) => x + 1) }
+                    },
+                    style: cvsStyle }),
                   liveSel ? h('div', { style: { position: 'absolute', ...box(liveSel), boxShadow: '0 0 0 9999px rgba(0,0,0,.55)', border: '1px solid #4f7cff', cursor: 'crosshair', pointerEvents: 'none' } },
                     h('span', { style: { position: 'absolute', right: 0, bottom: '-24px', color: '#fff', fontSize: '12px', background: 'rgba(0,0,0,.65)', padding: '1px 8px', borderRadius: '4px', whiteSpace: 'nowrap' } },
                       Math.round(Math.abs(liveSel.x2 - liveSel.x)) + ' × ' + Math.round(Math.abs(liveSel.y2 - liveSel.y))),
@@ -436,7 +511,7 @@ window.__ModuleLoader__.load({
                 ),
               ),
               h('div', { className: 'vts-bar' },
-                toolBtn('crop', '⛶', '裁剪：拖选区域，松手裁剪（Esc 退出裁剪）'), toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
+                toolBtn('crop', '⛶', '裁剪：拖选区域，松手裁剪（Esc 退出裁剪）'), toolBtn('rect', '□', '矩形框选'), toolBtn('arr', '↗', '箭头（画完可拖动端点/线身调整）'), toolBtn('text', 'T', '文字'), toolBtn('mos', '▒', '马赛克'),
                 sep('s1'),
                 VTS_COLORS.map((c) => colorBtn(c)),
                 sep('s2'),
