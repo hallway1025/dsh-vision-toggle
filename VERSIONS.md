@@ -11,7 +11,7 @@
 | dsh-vision-toggle-0.8.0.zip | bcff5eb（R42 修订打包自 d47cc2b） | 2026-11-05 |
 | dsh-vision-toggle-0.8.1.zip | f3b6eea（0.8.1 发布物瘦身） | 2026-11-05 |
 | dsh-vision-toggle-0.9.0.zip | 3e2df80 | 2026-11-06 |
-| dsh-vision-toggle-0.9.1.zip | 见表尾补记（隐藏窗口截图修复） | 2026-11-16 |
+| dsh-vision-toggle-0.9.1.zip | 885ba24（隐藏窗口截图修复） | 2026-11-16 |
 
 ## 现行（对包即对真）
 
