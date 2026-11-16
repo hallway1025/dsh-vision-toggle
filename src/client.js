@@ -681,6 +681,10 @@ window.__ModuleLoader__.load({
           const j = await r.json()
           if (!r.ok) throw new Error(j?.error || 'HTTP ' + r.status)
           if (!j.png) throw new Error('服务端未返回图像数据')
+          // 11-09：消费服务端 hidden 回执——非 ok 时明示（此前静默，隐藏失败无感知）
+          if (hideWin === true && j.hidden && j.hidden !== 'ok') {
+            setHint('宿主窗未隐藏（' + j.hidden + '），截图仍含 DSH 窗口'); setTimeout(() => setHint(null), 5000)
+          }
           setShot({ png: j.png })
         } catch (e) {
           setErr(e.message); setTimeout(() => setErr(null), 4000)

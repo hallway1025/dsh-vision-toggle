@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1 — 隐藏窗口截图修复（2026-11-16）
+
+- 修「隐藏窗口截图不生效」：宿主窗最小化那一步的 PowerShell 调用写法错了。`-Command <脚本> <pid> <cmd>` 里的裸参数不会被 `param()` 绑定——PowerShell 把 `<pid> <cmd>` 直接拼进命令串，报 ParserError（「表达式或语句中包含意外的标记」），窗口从未被最小化，于是截图里一直带着 DSH 窗口本体。改为调用运算符内联：`& { <脚本> } <pid> <cmd>`，位置参数才进 `param([int]$ProcId,[int]$Cmd)`。
+- 对照实测（node `child_process.spawn` 直传 argv，与插件同条件，2026-11-16）：老写法 `exit=1`、stdout 空、stderr 报「表达式或语句中包含意外的标记"9"」；新写法 `exit=0`、stdout `BOUND:1234:9`。
+- 服务端 `hidden` 回执不再静默：`hideWin=true` 且 `hidden !== 'ok'` 时客户端提示「宿主窗未隐藏（X），截图仍含 DSH 窗口」5 秒（此前隐藏失败无感知，只看服务端日志）。
+- 版本四处同步 0.9.1（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG）。
+
 ## 0.9.0 — 箭头可拖动 + 编辑器黑屏修复（2026-11-06）
 
 - 箭头工具画完可拖动调整：悬停端点/线身显示手柄，拖端点改方向长度、拖线身整体平移（主人 0.7.0 拍板顺延件）。

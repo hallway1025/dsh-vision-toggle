@@ -52,7 +52,10 @@ const SHOWWIN_PS = `
 
 async function setHostWindow(pid, cmd) {
   try {
-    const r = await spawnFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', SHOWWIN_PS, String(pid), String(cmd)], { timeout: 8000 });
+    // 修 11-09「隐藏窗口截图不生效」：-Command 后跟裸参数不绑定 param()，PS 把它们拼进命令串
+    // 报 ParserError 'Unexpected token'（实测 01:01，窗口从未被最小化）。正确姿势是把参数
+    // 内联进 & {} 调用运算符：& { param(...) ... } <pid> <cmd> 位置参数才进 param 绑定。
+    const r = await spawnFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& { ' + SHOWWIN_PS + ' } ' + String(pid) + ' ' + String(cmd)], { timeout: 8000 });
     return String(r.stdout || '').includes('OK') ? 'ok' : 'nowindow';
   } catch (e) {
     log('ShowWindow 失败:', e?.message ?? e);

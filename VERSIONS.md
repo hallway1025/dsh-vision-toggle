@@ -10,26 +10,29 @@
 | dsh-vision-toggle-0.7.0.zip | 930edab | 2026-11-05 |
 | dsh-vision-toggle-0.8.0.zip | bcff5eb（R42 修订打包自 d47cc2b） | 2026-11-05 |
 | dsh-vision-toggle-0.8.1.zip | f3b6eea（0.8.1 发布物瘦身） | 2026-11-05 |
+| dsh-vision-toggle-0.9.0.zip | 3e2df80 | 2026-11-06 |
+| dsh-vision-toggle-0.9.1.zip | 见表尾补记（隐藏窗口截图修复） | 2026-11-16 |
 
 ## 现行（对包即对真）
 
 | 项 | 值 |
 |---|---|
-| 插件版本 | 0.8.1（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
-| 发布包 | dsh-vision-toggle-0.8.1.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
-| 本版提交 | 0.8.0：8afe798 实时读取正交开关 + m11675/m11771 UI 收敛 → 0.8.1：f3b6eea 发布物瘦身（P1 testdata 出包 / P3 sentinel 出包+exports 删行 / P2 推送路径标注） |
+| 插件版本 | 0.9.1（package.json / dsh.plugin.json / ERRORS.md / CHANGELOG 四处一致） |
+| 发布包 | dsh-vision-toggle-0.9.1.zip（正式发布名固定无哈希；内部代次包才带 git 短哈希） |
+| 本版提交 | 0.9.0：3e2df80 箭头可拖动 + 编辑器黑屏修复 + 抓屏黑帧防御 → 0.9.1：隐藏窗口截图修复（ShowWindow 参数绑定改 `& { }` 调用运算符 + hidden 回执不再静默） |
 | 形式规格 | **v4.6 实时读取正交开关**（不在包内；`vision_modes_spec.md` 与源码同仓维护，位于 fork 所在仓库的 `memory/vision/` 目录） |
 | 上游 | dsh-see-now 0.0.7（Apache-2.0，LICENSE/NOTICE 原样保留） |
 | 档位 | 主菜单五挡：off / low(门槛20) / high(门槛12) / max(门槛7) / ultra；底部「⚙ 读取速度」设置（默认/实时，正交开关）；拉取档 wakeGapSec=∞ 零投递（custom 挡后端定义保留兼容旧 config，UI 不可达） |
 | 默认档 | off（DEFAULT_MODE，进程重启必回 off） |
 | 0.8.0 发布包 | 已被 0.8.1 取代，历史包在 fork/_archive/ |
+| 0.9.0 发布包 | 已被 0.9.1 取代，历史包在 fork/_archive/ |
 
 ## 版本声明分布（哪里有版本号，改版本改哪里）
 
 1. package.json:3 `version`
 2. dsh.plugin.json:4 `version`
-3. ERRORS.md:1 标题 `（v0.8.1）`
-4. CHANGELOG.md 段头（`## 0.8.1 —`）
+3. ERRORS.md:1 标题 `（v0.9.1）`
+4. CHANGELOG.md 段头（`## 0.9.1 —`）
 5. src 注释里的版本行（runner.js:76 / index.js:195 / config.js:21 / dialog.js:6 / client.js:12）——历史语义注记，不随小版本改
 
 ## 审查轨迹（七轮收敛 + 0.6.0 自查）
@@ -52,6 +55,7 @@
 | 0.8.0 | 8afe798 + bcff5eb | 实时读取正交开关（主人 m10952 半分钟延迟反馈）；两次重启 API 级验证；m11675 子面板只留速度、m11771 自定义降级为设置项；闸门 0/0 |
 | 十 | 0.8.0（bcff5eb 包） | R42：VERSIONS.md 失修（本文件停留 0.7.0）→ 已补 0.8.0 段；代码本体无硬伤，实时开关五处落点全对 |
 | 十一 | 0.8.0-d47cc2b（回验+性能/体积专项） | R42 修复成立；P1 testdata 出包（-67%）/P3 sentinel 出包/P2 推送残留标注已做（0.8.1）；P4 编辑器拆 bundle 排 0.9.0 |
+| 十三 | 0.9.1（隐藏窗口截图修复） | 参数绑定对照实测：老写法 `-Command <脚本> <pid> <cmd>` → `exit=1` + ParserError（「表达式或语句中包含意外的标记」），窗口从未被最小化、截图必带宿主窗本体；新写法 `& { <脚本> } <pid> <cmd>` → `exit=0`、stdout `BOUND:1234:9`。发布物形态＝`git archive --format=zip <tag>`（与 0.9.0 包 42 条目名逐项一致，双向差集为空）。端到端（宿主重启后按截图键看 `hidden=ok`）待验收 |
 | 十二 | 0.8.1-a1d5fe7（算法专项） | P1/P2/P3 回验全采纳；热路径实测 scorer 0.9ms/s CPU 极省、算法零 bug、可发；A1 tiers 环形计数器/A3 hsv 池化记 v1.0 顺手做，A2/A4 仅记录不阻塞 |
 
 ## 上游遗留物处置（版本统一巡检 2026-11-04）
